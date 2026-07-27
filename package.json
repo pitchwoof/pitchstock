@@ -1,0 +1,23 @@
+{
+  "name": "pitchstock",
+  "version": "1.0.0",
+  "description": "Ink inventory management app for pitchstock",
+  "main": "server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js",
+    "seed": "node seed/seed.js",
+    "import-stock": "node seed/import_stock.js"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "express-session": "^1.18.0",
+    "bcryptjs": "^2.4.3"
+  },
+  "devDependencies": {
+    "xlsx": "^0.18.5"
+  }
+}

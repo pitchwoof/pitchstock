@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>UIPS — คลังหมึกพิมพ์</title>
+<link rel="icon" type="image/png" href="/img/uips-logo.png">
+<link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+
+<div id="login-screen" class="login-screen">
+  <form id="login-form" class="login-box">
+    <img src="/img/uips-logo.png" alt="UIPS" class="login-logo">
+    <p class="sub">เข้าสู่ระบบคลังหมึกพิมพ์</p>
+    <label>ชื่อผู้ใช้
+      <input type="text" id="login-username" autocomplete="username" required>
+    </label>
+    <label>รหัสผ่าน
+      <input type="password" id="login-password" autocomplete="current-password" required>
+    </label>
+    <button type="submit">เข้าสู่ระบบ</button>
+    <p id="login-error" class="error-text"></p>
+  </form>
+</div>
+
+<div id="app" class="app hidden">
+  <header class="topbar">
+    <div class="brand"><img src="/img/uips-logo.png" alt="UIPS" class="brand-logo"> UIPS</div>
+    <nav id="nav" class="nav">
+      <a href="#/dashboard" data-view="dashboard">แดชบอร์ด</a>
+      <a href="#/inventory" data-view="inventory">คลังสินค้า</a>
+      <a href="#/receive" data-view="receive">รับสินค้าเข้า</a>
+      <a href="#/issue" data-view="issue">เบิกสินค้าออก</a>
+      <a href="#/history" data-view="history">การเคลื่อนไหว</a>
+      <a href="#/claims" data-view="claims">เคลม/ตีกลับ</a>
+      <a href="#/products" data-view="products">สินค้า</a>
+      <a href="#/customers" data-view="customers">ลูกค้า</a>
+      <a href="#/users" data-view="users" id="nav-users">ผู้ใช้งาน</a>
+    </nav>
+    <div class="userbox">
+      <span id="user-name"></span>
+      <a href="#/account" class="link-btn" style="text-decoration:none">เปลี่ยนรหัสผ่าน</a>
+      <button id="logout-btn" class="link-btn">ออกจากระบบ</button>
+    </div>
+  </header>
+
+  <main id="view" class="view"></main>
+</div>
+
+<script src="/js/app.js"></script>
+</body>
+</html>
