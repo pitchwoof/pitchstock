@@ -1694,7 +1694,6 @@ function buildOrdersTableHTML(orders) {
 
 async function renderOrders(container) {
   await loadProducts();
-  await loadSuppliers();
   container.innerHTML = `
     <h2>สั่งซื้อ (ของที่สั่งไปแล้วกำลังเข้า)</h2>
     <p class="muted">บันทึกรายการที่สั่งซื้อจากซัพพลายเออร์ไว้ล่วงหน้า เพื่อติดตามว่าอะไรกำลังจะเข้าคลัง
@@ -1718,25 +1717,9 @@ async function renderOrders(container) {
             <input type="date" id="of-date" value="${new Date().toISOString().slice(0, 10)}">
           </label>
         </div>
-        <div class="form-row">
-          <label class="field">ซัพพลายเออร์ที่สั่ง
-            <select id="of-supplier">
-              <option value="">— ไม่ระบุ —</option>
-              ${supplierOptions(state.suppliers)}
-              <option value="__new__">+ เพิ่มซัพพลายเออร์ใหม่…</option>
-            </select>
-          </label>
-          <label class="field">คาดว่าจะถึง (ไม่บังคับ)
-            <input type="date" id="of-expected">
-          </label>
-        </div>
-        <div class="form-row hidden" id="of-new-supplier-row">
-          <label class="field">ชื่อซัพพลายเออร์ใหม่
-            <input type="text" id="of-new-supplier-name">
-          </label>
-          <button type="button" id="of-add-supplier-btn" class="secondary" style="align-self:flex-end">เพิ่มซัพพลายเออร์</button>
-        </div>
-        <div id="of-supplier-msg"></div>
+        <label class="field">คาดว่าจะถึง (ไม่บังคับ)
+          <input type="date" id="of-expected">
+        </label>
         <label class="field">หมายเหตุ
           <textarea id="of-note" rows="2"></textarea>
         </label>
@@ -1764,52 +1747,25 @@ async function renderOrders(container) {
     state.products
   );
 
-  document.getElementById('of-supplier').addEventListener('change', (e) => {
-    document.getElementById('of-new-supplier-row').classList.toggle('hidden', e.target.value !== '__new__');
-    if (e.target.value === '__new__') document.getElementById('of-new-supplier-name').focus();
-  });
-
-  document.getElementById('of-add-supplier-btn').addEventListener('click', async () => {
-    const nameInput = document.getElementById('of-new-supplier-name');
-    const supplierMsg = document.getElementById('of-supplier-msg');
-    const name = nameInput.value.trim();
-    supplierMsg.innerHTML = '';
-    if (!name) return;
-    try {
-      await api('POST', '/api/suppliers', { name });
-      await loadSuppliers();
-      const select = document.getElementById('of-supplier');
-      select.innerHTML = `<option value="">— ไม่ระบุ —</option>${supplierOptions(state.suppliers)}<option value="__new__">+ เพิ่มซัพพลายเออร์ใหม่…</option>`;
-      select.value = name;
-      document.getElementById('of-new-supplier-row').classList.add('hidden');
-      nameInput.value = '';
-    } catch (err) {
-      supplierMsg.innerHTML = `<p class="msg error">${escapeHtml(err.message)}</p>`;
-    }
-  });
-
   document.getElementById('of-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     const msg = document.getElementById('of-msg');
     msg.innerHTML = '';
-    const supplierValue = document.getElementById('of-supplier').value;
-    if (supplierValue === '__new__') {
-      msg.innerHTML = '<p class="msg error">กรุณากด "เพิ่มซัพพลายเออร์" ก่อน หรือเลือกซัพพลายเออร์ที่มีอยู่แล้ว</p>';
-      return;
-    }
     try {
+      const productId = Number(document.getElementById('of-product').value);
+      const product = state.products.find((p) => p.id === productId);
+      const supplierValue = document.getElementById('of-product-supplier').value || (product && product.brand) || null;
       await api('POST', '/api/purchase-orders', {
-        productId: Number(document.getElementById('of-product').value),
+        productId,
         quantity: Number(document.getElementById('of-qty').value),
         orderDate: document.getElementById('of-date').value || null,
         expectedDate: document.getElementById('of-expected').value || null,
-        supplier: supplierValue || null,
+        supplier: supplierValue,
         note: document.getElementById('of-note').value || null,
       });
       msg.innerHTML = '<p class="msg success">บันทึกรายการสั่งซื้อเรียบร้อยแล้ว</p>';
       e.target.reset();
       document.getElementById('of-date').value = new Date().toISOString().slice(0, 10);
-      document.getElementById('of-new-supplier-row').classList.add('hidden');
       await loadOrders();
     } catch (err) {
       msg.innerHTML = `<p class="msg error">${escapeHtml(err.message)}</p>`;
@@ -1864,14 +1820,17 @@ async function renderProducts(container) {
   const isAdmin = state.user.role === 'admin';
   const rows = products.map((p) => `
     <tr>
-      <td>${escapeHtml(p.sku_code)}</td>
-      <td>${escapeHtml(p.name)}</td>
-      <td>${escapeHtml(p.brand || '')}</td>
-      <td>${escapeHtml(p.unit)}</td>
+      <td>${isAdmin ? `<input type="text" class="pf-sku" data-id="${p.id}" value="${escapeHtml(p.sku_code)}" style="min-width:110px">` : escapeHtml(p.sku_code)}</td>
+      <td>${isAdmin ? `<input type="text" class="pf-name" data-id="${p.id}" value="${escapeHtml(p.name)}" style="min-width:160px">` : escapeHtml(p.name)}</td>
+      <td>${isAdmin ? `<input type="text" class="pf-brand" data-id="${p.id}" value="${escapeHtml(p.brand || '')}" style="min-width:100px">` : escapeHtml(p.brand || '')}</td>
+      <td>${isAdmin ? `<input type="text" class="pf-unit" data-id="${p.id}" value="${escapeHtml(p.unit)}" style="width:70px">` : escapeHtml(p.unit)}</td>
       <td data-requires="edit"><input type="number" class="pf-reorder-level" data-id="${p.id}" value="${p.reorder_level}" step="any" min="0" style="width:80px"></td>
       <td data-requires="edit"><input type="number" class="pf-leadtime" data-id="${p.id}" value="${p.lead_time_days}" min="0" style="width:70px"></td>
       <td>${p.archived ? '<span class="badge low">เก็บถาวร</span>' : '<span class="badge ok">ใช้งานอยู่</span>'}</td>
-      <td>${isAdmin ? `<button class="secondary toggle-archive" data-id="${p.id}" data-archived="${p.archived}">${p.archived ? 'เลิกเก็บถาวร' : 'เก็บถาวร'}</button>` : ''}</td>
+      <td style="white-space:nowrap">${isAdmin ? `
+        <button class="secondary toggle-archive" data-id="${p.id}" data-archived="${p.archived}">${p.archived ? 'เลิกเก็บถาวร' : 'เก็บถาวร'}</button>
+        <button type="button" class="secondary pf-delete-btn" data-id="${p.id}" data-name="${escapeHtml(p.name)}">ลบ</button>
+      ` : ''}</td>
     </tr>`).join('');
 
   container.innerHTML = `
@@ -1955,22 +1914,53 @@ async function renderProducts(container) {
     });
   });
 
+  const PF_FIELD_BY_CLASS = { 'pf-sku': 'skuCode', 'pf-name': 'name', 'pf-brand': 'brand', 'pf-unit': 'unit' };
+  container.querySelectorAll('.pf-sku, .pf-name, .pf-brand, .pf-unit').forEach((input) => {
+    input.addEventListener('change', async () => {
+      const field = PF_FIELD_BY_CLASS[[...input.classList].find((c) => PF_FIELD_BY_CLASS[c])];
+      try {
+        await api('PUT', `/api/products/${input.dataset.id}`, { [field]: input.value });
+        await loadProducts();
+      } catch (err) {
+        alert(err.message);
+        route();
+      }
+    });
+  });
+
+  container.querySelectorAll('.pf-delete-btn').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      if (!confirm(`ลบสินค้า "${btn.dataset.name}" ใช่หรือไม่? การลบไม่สามารถย้อนกลับได้`)) return;
+      try {
+        await api('DELETE', `/api/products/${btn.dataset.id}`);
+        await loadProducts();
+        route();
+      } catch (err) {
+        alert(err.message);
+      }
+    });
+  });
+
   applyPermissionGates(container);
 }
 
 // ---------- Customers ----------
 async function renderCustomers(container) {
   const customers = await api('GET', '/api/customers?includeArchived=1');
+  const editable = canEdit();
 
   const rows = customers.map((c) => `
     <tr>
-      <td>${escapeHtml(c.name)}</td>
+      <td>${editable ? `<input type="text" class="cu-name" data-id="${c.id}" value="${escapeHtml(c.name)}" style="min-width:180px">` : escapeHtml(c.name)}</td>
       <td>${escapeHtml(c.phone || '')}</td>
       <td>${escapeHtml(c.contact_person || '')}</td>
       <td class="muted">${escapeHtml(c.address || '')}</td>
-      <td data-requires="edit"><input type="text" class="cu-assigned" data-id="${c.id}" value="${escapeHtml(c.assigned_to || '')}" placeholder="ไม่ระบุ"></td>
+      <td>${editable ? `<input type="text" class="cu-assigned" data-id="${c.id}" value="${escapeHtml(c.assigned_to || '')}" placeholder="ไม่ระบุ">` : escapeHtml(c.assigned_to || '')}</td>
       <td>${c.archived ? '<span class="badge low">เก็บถาวร</span>' : '<span class="badge ok">ใช้งานอยู่</span>'}</td>
-      <td data-requires="edit"><button class="secondary toggle-customer-archive" data-id="${c.id}" data-archived="${c.archived}">${c.archived ? 'เลิกเก็บถาวร' : 'เก็บถาวร'}</button></td>
+      <td data-requires="edit" style="white-space:nowrap">
+        <button class="secondary toggle-customer-archive" data-id="${c.id}" data-archived="${c.archived}">${c.archived ? 'เลิกเก็บถาวร' : 'เก็บถาวร'}</button>
+        <button type="button" class="secondary cu-delete-btn" data-id="${c.id}" data-name="${escapeHtml(c.name)}">ลบ</button>
+      </td>
     </tr>`).join('');
 
   container.innerHTML = `
@@ -2032,11 +2022,34 @@ async function renderCustomers(container) {
     });
   });
 
+  container.querySelectorAll('.cu-name').forEach((input) => {
+    input.addEventListener('change', async () => {
+      try {
+        await api('PATCH', `/api/customers/${input.dataset.id}`, { name: input.value });
+      } catch (err) {
+        alert(err.message);
+        route();
+      }
+    });
+  });
+
   container.querySelectorAll('.toggle-customer-archive').forEach((btn) => {
     btn.addEventListener('click', async () => {
       const archived = btn.dataset.archived === '1';
       await api('PATCH', `/api/customers/${btn.dataset.id}`, { archived: !archived });
       route();
+    });
+  });
+
+  container.querySelectorAll('.cu-delete-btn').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      if (!confirm(`ลบลูกค้า "${btn.dataset.name}" ใช่หรือไม่? การลบไม่สามารถย้อนกลับได้`)) return;
+      try {
+        await api('DELETE', `/api/customers/${btn.dataset.id}`);
+        route();
+      } catch (err) {
+        alert(err.message);
+      }
     });
   });
 

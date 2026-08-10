@@ -43,14 +43,23 @@ router.patch('/:id/forecast-settings', requireAuth, requireEdit, (req, res) => {
 });
 
 router.put('/:id', requireAuth, requireAdmin, (req, res) => {
-  const { name, brand, color, unit, reorderLevel, note, archived } = req.body || {};
+  const {
+    skuCode, name, brand, color, unit, reorderLevel, note, archived,
+  } = req.body || {};
   const product = db.prepare('SELECT * FROM products WHERE id = ?').get(req.params.id);
   if (!product) return res.status(404).json({ error: 'ไม่พบสินค้า' });
 
+  const trimmedSku = skuCode !== undefined ? skuCode.trim() : null;
+  if (trimmedSku && trimmedSku !== product.sku_code) {
+    const existing = db.prepare('SELECT id FROM products WHERE sku_code = ? AND id != ?').get(trimmedSku, req.params.id);
+    if (existing) return res.status(409).json({ error: 'มีรหัส SKU นี้อยู่แล้ว' });
+  }
+
   db.prepare(`
-    UPDATE products SET name = ?, brand = ?, color = ?, unit = ?, reorder_level = ?, note = ?, archived = ?
+    UPDATE products SET sku_code = ?, name = ?, brand = ?, color = ?, unit = ?, reorder_level = ?, note = ?, archived = ?
     WHERE id = ?
   `).run(
+    trimmedSku || product.sku_code,
     name ?? product.name,
     brand ?? product.brand,
     color ?? product.color,
@@ -60,6 +69,22 @@ router.put('/:id', requireAuth, requireAdmin, (req, res) => {
     archived !== undefined ? (archived ? 1 : 0) : product.archived,
     req.params.id
   );
+  res.json({ ok: true });
+});
+
+router.delete('/:id', requireAuth, requireAdmin, (req, res) => {
+  const product = db.prepare('SELECT id FROM products WHERE id = ?').get(req.params.id);
+  if (!product) return res.status(404).json({ error: 'ไม่พบสินค้า' });
+  try {
+    db.prepare('DELETE FROM products WHERE id = ?').run(req.params.id);
+  } catch (err) {
+    if (String(err.message).includes('FOREIGN KEY')) {
+      return res.status(409).json({
+        error: 'ลบไม่ได้ เพราะสินค้านี้มีประวัติการรับเข้า/เบิกออก/เคลม/สั่งซื้ออยู่ในระบบ — ใช้ "เก็บถาวร" แทนเพื่อซ่อนจากรายการโดยไม่ลบประวัติ',
+      });
+    }
+    return res.status(500).json({ error: 'ลบสินค้าไม่สำเร็จ', detail: err.message });
+  }
   res.json({ ok: true });
 });
 

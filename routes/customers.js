@@ -45,4 +45,11 @@ router.patch('/:id', requireAuth, requireEdit, (req, res) => {
   res.json({ ok: true });
 });
 
+router.delete('/:id', requireAuth, requireEdit, (req, res) => {
+  const customer = db.prepare('SELECT id FROM customers WHERE id = ?').get(req.params.id);
+  if (!customer) return res.status(404).json({ error: 'ไม่พบลูกค้า' });
+  db.prepare('DELETE FROM customers WHERE id = ?').run(req.params.id);
+  res.json({ ok: true });
+});
+
 module.exports = router;
