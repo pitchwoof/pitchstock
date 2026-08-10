@@ -1,6 +1,6 @@
 const express = require('express');
 const db = require('../db');
-const { requireAuth } = require('../middleware/auth');
+const { requireAuth, requireEdit } = require('../middleware/auth');
 
 const router = express.Router();
 
@@ -29,14 +29,70 @@ router.get('/', requireAuth, (req, res) => {
     ORDER BY t.transaction_date DESC, t.created_at DESC
     LIMIT ?
   `).all(...params, limit);
+  if (req.session.role !== 'admin') {
+    for (const r of rows) delete r.unit_price;
+  }
   res.json(rows);
 });
 
+// Correct an issue-stock (OUT) record that was entered wrong. Quantity changes are re-applied
+// against the batch it was drawn from (can't exceed what's currently available in that batch).
+const VALID_PURPOSES = ['sale', 'trial'];
+
+router.patch('/:id', requireAuth, requireEdit, (req, res) => {
+  const {
+    quantity, transactionDate, counterparty, note, purpose, unitPrice, requisitionNo,
+  } = req.body || {};
+  const txn = db.prepare('SELECT * FROM stock_transactions WHERE id = ?').get(req.params.id);
+  if (!txn) return res.status(404).json({ error: 'ไม่พบรายการ' });
+  if (txn.type !== 'OUT') return res.status(400).json({ error: 'แก้ไขได้เฉพาะรายการเบิกออก' });
+
+  const batch = db.prepare('SELECT * FROM batches WHERE id = ?').get(txn.batch_id);
+  let newQty = txn.quantity;
+  let newRemaining = batch.quantity_remaining;
+  if (quantity !== undefined) {
+    const qty = Number(quantity);
+    if (!qty || qty <= 0) return res.status(400).json({ error: 'จำนวนต้องมากกว่า 0' });
+    const delta = qty - txn.quantity;
+    newRemaining = batch.quantity_remaining - delta;
+    if (newRemaining < 0) {
+      return res.status(400).json({ error: `ล็อตนี้เหลือไม่พอสำหรับจำนวนใหม่ (คงเหลือปัจจุบัน ${batch.quantity_remaining})` });
+    }
+    newQty = qty;
+  }
+
+  const newDate = transactionDate || txn.transaction_date;
+  const newCounterparty = counterparty !== undefined ? (counterparty || null) : txn.counterparty;
+  const newNote = note !== undefined ? (note || null) : txn.note;
+  const newPurpose = purpose !== undefined ? (VALID_PURPOSES.includes(purpose) ? purpose : txn.purpose) : txn.purpose;
+  const newUnitPrice = unitPrice !== undefined ? (unitPrice !== null && unitPrice !== '' ? Number(unitPrice) : null) : txn.unit_price;
+  const newRequisitionNo = requisitionNo !== undefined ? (requisitionNo || null) : txn.requisition_no;
+
+  db.exec('BEGIN');
+  try {
+    if (quantity !== undefined) {
+      db.prepare('UPDATE batches SET quantity_remaining = ? WHERE id = ?').run(newRemaining, batch.id);
+    }
+    db.prepare(`
+      UPDATE stock_transactions
+      SET quantity = ?, transaction_date = ?, counterparty = ?, note = ?, purpose = ?, unit_price = ?, requisition_no = ?
+      WHERE id = ?
+    `).run(newQty, newDate, newCounterparty, newNote, newPurpose, newUnitPrice, newRequisitionNo, txn.id);
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    return res.status(500).json({ error: 'แก้ไขรายการเบิกออกไม่สำเร็จ', detail: err.message });
+  }
+
+  res.json({ ok: true });
+});
+
 router.get('/export.csv', requireAuth, (req, res) => {
+  const isAdmin = req.session.role === 'admin';
   const { where, params } = buildQuery(req.query);
   const rows = db.prepare(`
     SELECT t.transaction_date, t.type, t.purpose, p.sku_code, p.name AS product_name, b.batch_number, b.expiration_date,
-           t.quantity, p.unit, t.counterparty, u.display_name AS user_name, t.note
+           t.quantity, p.unit, t.counterparty, u.display_name AS user_name, t.note, t.unit_price, t.requisition_no
     FROM stock_transactions t
     JOIN products p ON p.id = t.product_id
     JOIN batches b ON b.id = t.batch_id
@@ -47,7 +103,8 @@ router.get('/export.csv', requireAuth, (req, res) => {
 
   const TYPE_LABEL = { IN: 'รับเข้า', OUT: 'เบิกออก', ADJUST: 'ปรับปรุง' };
   const PURPOSE_LABEL = { sale: 'ขาย', trial: 'ทดลอง/ตัวอย่าง' };
-  const header = ['วันที่', 'ประเภท', 'วัตถุประสงค์', 'รหัส SKU', 'สินค้า', 'ล็อต', 'วันหมดอายุ', 'จำนวน', 'หน่วย', 'ลูกค้า/ซัพพลายเออร์', 'ผู้ทำรายการ', 'หมายเหตุ'];
+  const header = ['วันที่', 'ประเภท', 'วัตถุประสงค์', 'รหัส SKU', 'สินค้า', 'ล็อต', 'วันหมดอายุ', 'จำนวน', 'หน่วย', 'ลูกค้า/ซัพพลายเออร์', 'ผู้ทำรายการ', 'เลขใบเบิก', 'หมายเหตุ'];
+  if (isAdmin) header.push('ราคาขาย/หน่วย', 'มูลค่ารวม');
   const csvEscape = (v) => {
     if (v === null || v === undefined) return '';
     const s = String(v);
@@ -55,11 +112,13 @@ router.get('/export.csv', requireAuth, (req, res) => {
   };
   const lines = [header.join(',')];
   for (const r of rows) {
-    lines.push([
+    const row = [
       r.transaction_date, TYPE_LABEL[r.type] || r.type, r.type === 'OUT' ? (PURPOSE_LABEL[r.purpose] || '') : '',
       r.sku_code, r.product_name, r.batch_number, r.expiration_date,
-      r.quantity, r.unit, r.counterparty, r.user_name, r.note,
-    ].map(csvEscape).join(','));
+      r.quantity, r.unit, r.counterparty, r.user_name, r.requisition_no, r.note,
+    ];
+    if (isAdmin) row.push(r.unit_price ?? '', r.unit_price !== null && r.unit_price !== undefined ? r.unit_price * r.quantity : '');
+    lines.push(row.map(csvEscape).join(','));
   }
 
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');

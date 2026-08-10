@@ -6,6 +6,12 @@
 <title>UIPS — คลังหมึกพิมพ์</title>
 <link rel="icon" type="image/png" href="/img/uips-logo.png">
 <link rel="stylesheet" href="/css/style.css">
+<script>
+(function () {
+  var saved = localStorage.getItem('pitchstock-theme');
+  if (saved === 'light' || saved === 'dark') document.documentElement.setAttribute('data-theme', saved);
+})();
+</script>
 </head>
 <body>
 
@@ -30,6 +36,7 @@
     <nav id="nav" class="nav">
       <a href="#/dashboard" data-view="dashboard">แดชบอร์ด</a>
       <a href="#/inventory" data-view="inventory">คลังสินค้า</a>
+      <a href="#/orders" data-view="orders">สั่งซื้อ</a>
       <a href="#/receive" data-view="receive">รับสินค้าเข้า</a>
       <a href="#/issue" data-view="issue">เบิกสินค้าออก</a>
       <a href="#/history" data-view="history">การเคลื่อนไหว</a>
@@ -39,6 +46,7 @@
       <a href="#/users" data-view="users" id="nav-users">ผู้ใช้งาน</a>
     </nav>
     <div class="userbox">
+      <button id="theme-toggle" class="theme-toggle" type="button" title="สลับโหมดกลางวัน/กลางคืน">🌙</button>
       <span id="user-name"></span>
       <a href="#/account" class="link-btn" style="text-decoration:none">เปลี่ยนรหัสผ่าน</a>
       <button id="logout-btn" class="link-btn">ออกจากระบบ</button>

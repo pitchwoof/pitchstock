@@ -1,6 +1,6 @@
 const express = require('express');
 const db = require('../db');
-const { requireAuth } = require('../middleware/auth');
+const { requireAuth, requireCreate } = require('../middleware/auth');
 
 const router = express.Router();
 
@@ -47,10 +47,11 @@ router.get('/preview', requireAuth, (req, res) => {
 // batches unless batchId is given.
 const VALID_PURPOSES = ['sale', 'trial'];
 
-router.post('/', requireAuth, (req, res) => {
-  const { productId, quantity, customer, transactionDate, note, batchId, purpose } = req.body || {};
+router.post('/', requireAuth, requireCreate, (req, res) => {
+  const { productId, quantity, customer, transactionDate, note, batchId, purpose, unitPrice, requisitionNo } = req.body || {};
   const qty = Number(quantity);
   const txnPurpose = VALID_PURPOSES.includes(purpose) ? purpose : 'sale';
+  const price = unitPrice !== undefined && unitPrice !== null && unitPrice !== '' ? Number(unitPrice) : null;
   if (!productId || !qty || qty <= 0) {
     return res.status(400).json({ error: 'กรุณาระบุสินค้าและจำนวนที่มากกว่า 0' });
   }
@@ -59,8 +60,8 @@ router.post('/', requireAuth, (req, res) => {
 
   const tDate = transactionDate || new Date().toISOString().slice(0, 10);
   const insertTxn = db.prepare(`
-    INSERT INTO stock_transactions (type, batch_id, product_id, quantity, transaction_date, counterparty, user_id, note, purpose)
-    VALUES ('OUT', ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO stock_transactions (type, batch_id, product_id, quantity, transaction_date, counterparty, user_id, note, purpose, unit_price, requisition_no)
+    VALUES ('OUT', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   const updateBatch = db.prepare('UPDATE batches SET quantity_remaining = ? WHERE id = ?');
 
@@ -74,7 +75,7 @@ router.post('/', requireAuth, (req, res) => {
     db.exec('BEGIN');
     try {
       updateBatch.run(batch.quantity_remaining - qty, batch.id);
-      insertTxn.run(batch.id, productId, qty, tDate, customer || null, req.session.userId, note || null, txnPurpose);
+      insertTxn.run(batch.id, productId, qty, tDate, customer || null, req.session.userId, note || null, txnPurpose, price, requisitionNo || null);
       db.exec('COMMIT');
     } catch (err) {
       db.exec('ROLLBACK');
@@ -108,7 +109,7 @@ router.post('/', requireAuth, (req, res) => {
   try {
     for (const { batch, take } of allocation) {
       updateBatch.run(batch.quantity_remaining - take, batch.id);
-      insertTxn.run(batch.id, productId, take, tDate, customer || null, req.session.userId, note || null, txnPurpose);
+      insertTxn.run(batch.id, productId, take, tDate, customer || null, req.session.userId, note || null, txnPurpose, price, requisitionNo || null);
     }
     db.exec('COMMIT');
   } catch (err) {
@@ -124,11 +125,11 @@ router.post('/', requireAuth, (req, res) => {
 // Convert stock from one product (SKU) into another — e.g. relabelling ink into a different
 // number before shipping. Deducts from the source (FEFO, or a specific batch if given) and
 // creates a brand-new batch under the destination product.
-router.post('/convert', requireAuth, (req, res) => {
+router.post('/convert', requireAuth, requireCreate, (req, res) => {
   const {
     sourceProductId, sourceBatchId, quantity,
     destProductId, destExpirationDate, destBatchNumber,
-    conversionDate, note,
+    conversionDate, note, customer,
   } = req.body || {};
   const qty = Number(quantity);
 
@@ -193,9 +194,11 @@ router.post('/convert', requireAuth, (req, res) => {
   let newBatchId;
   db.exec('BEGIN');
   try {
+    const outCounterparty = customer ? `${customer} (แปลงเป็น ${destProduct.name})` : `แปลงเป็น ${destProduct.name}`;
+    const inCounterparty = customer ? `${customer} (แปลงจาก ${sourceProduct.name})` : `แปลงจาก ${sourceProduct.name}`;
     for (const { batch, take } of sourceAllocation) {
       updateBatch.run(batch.quantity_remaining - take, batch.id);
-      insertOutTxn.run(batch.id, sourceProductId, take, cDate, `แปลงเป็น ${destProduct.name}`, req.session.userId, note || null);
+      insertOutTxn.run(batch.id, sourceProductId, take, cDate, outCounterparty, req.session.userId, note || null);
     }
     const bInfo = insertBatch.run(
       destProductId, destBatchNumber || `CONV-${sourceProduct.sku_code}-${cDate}`, inheritedExpiration,
@@ -203,7 +206,7 @@ router.post('/convert', requireAuth, (req, res) => {
       note || `แปลงจาก ${sourceProduct.name} (${sourceProduct.sku_code})`
     );
     newBatchId = Number(bInfo.lastInsertRowid);
-    insertInTxn.run(newBatchId, destProductId, qty, cDate, `แปลงจาก ${sourceProduct.name}`, req.session.userId, note || null);
+    insertInTxn.run(newBatchId, destProductId, qty, cDate, inCounterparty, req.session.userId, note || null);
     db.exec('COMMIT');
   } catch (err) {
     db.exec('ROLLBACK');

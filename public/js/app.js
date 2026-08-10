@@ -5,7 +5,41 @@ const state = {
   customers: [],
 };
 
-const ROLE_LABEL = { admin: 'ผู้ดูแลระบบ', staff: 'พนักงาน' };
+// ---------- Theme toggle (day/night mode) ----------
+const THEME_KEY = 'pitchstock-theme';
+function applyTheme(theme) {
+  document.documentElement.setAttribute('data-theme', theme);
+  const btn = document.getElementById('theme-toggle');
+  if (btn) btn.textContent = theme === 'dark' ? '☀️' : '🌙';
+}
+applyTheme(localStorage.getItem(THEME_KEY) || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'));
+document.getElementById('theme-toggle').addEventListener('click', () => {
+  const next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+  localStorage.setItem(THEME_KEY, next);
+  applyTheme(next);
+});
+
+const ROLE_LABEL = {
+  admin: 'ผู้ดูแลระบบ',
+  editor: 'กรอก + แก้ไข',
+  creator: 'กรอกได้อย่างเดียว',
+  viewer: 'ดูอย่างเดียว',
+  staff: 'พนักงาน (เดิม)',
+};
+function canCreate() { return ['admin', 'editor', 'creator'].includes(state.user.role); }
+function canEdit() { return ['admin', 'editor'].includes(state.user.role); }
+// Hides any element carrying data-requires="create"/"edit" that the current user isn't allowed
+// to use. Call once after a page's HTML is written into the DOM. Backend enforces the real
+// boundary (403s on disallowed writes) — this only keeps the UI from offering actions that
+// would fail, so a page render is enough; no need to re-run after re-renders within the page.
+function applyPermissionGates(root) {
+  if (!canCreate()) {
+    root.querySelectorAll('[data-requires="create"]').forEach((el) => el.remove());
+  }
+  if (!canEdit()) {
+    root.querySelectorAll('[data-requires="edit"]').forEach((el) => el.remove());
+  }
+}
 const TYPE_LABEL = { IN: 'รับเข้า', OUT: 'เบิกออก', ADJUST: 'ปรับปรุง' };
 const PURPOSE_LABEL = { sale: 'ขาย', trial: 'ทดลอง/ตัวอย่าง' };
 const EXPIRY_STATUS_LABEL = { expired: 'หมดอายุ', critical: 'ใกล้หมดอายุมาก', warning: 'เฝ้าระวัง', ok: 'ปกติ', none: 'ไม่ระบุ' };
@@ -81,6 +115,7 @@ async function loadProducts() {
 const routes = {
   dashboard: renderDashboard,
   inventory: renderInventory,
+  orders: renderOrders,
   receive: renderReceive,
   issue: renderIssue,
   history: renderHistory,
@@ -292,6 +327,92 @@ async function loadCustomers() {
   state.customers = await api('GET', '/api/customers');
 }
 
+// Type-to-filter combobox layered over a hidden native <select> (id="X"), driven by a text
+// input (id="X-search") and a dropdown list (id="X-list") already present in the markup.
+// Keeps using select.value / select.innerHTML / 'change' events everywhere else in the app —
+// call select._syncSearchable() after any code sets select.value or rebuilds its options directly.
+function wireSearchableSelect(selectId, { newNameInputId } = {}) {
+  const select = document.getElementById(selectId);
+  const input = document.getElementById(`${selectId}-search`);
+  const list = document.getElementById(`${selectId}-list`);
+  let activeIndex = -1;
+
+  function optionsData() {
+    return [...select.options].map((o) => ({ value: o.value, label: o.textContent }));
+  }
+  function syncInputFromSelect() {
+    const opt = select.options[select.selectedIndex];
+    input.value = opt && opt.value ? opt.textContent : '';
+  }
+  function closeList() {
+    list.classList.add('hidden');
+    activeIndex = -1;
+  }
+  function highlight() {
+    list.querySelectorAll('.ss-item[data-value]').forEach((el, i) => el.classList.toggle('active', i === activeIndex));
+  }
+  function pick(value) {
+    select.value = value;
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+    if (value === '__new__' && newNameInputId && input.value.trim()) {
+      const nameInput = document.getElementById(newNameInputId);
+      if (nameInput) nameInput.value = input.value.trim();
+    }
+    syncInputFromSelect();
+    closeList();
+  }
+  function renderList(filter) {
+    const q = filter.trim().toLowerCase();
+    const all = optionsData().filter((o) => o.value !== '');
+    const addNew = all.find((o) => o.value === '__new__');
+    const regular = all.filter((o) => o.value !== '__new__');
+    const matched = q ? regular.filter((o) => o.label.toLowerCase().includes(q)) : regular;
+    const rows = matched.map((o) => `<div class="ss-item" data-value="${escapeHtml(o.value)}">${escapeHtml(o.label)}</div>`).join('');
+    const addRow = addNew ? `<div class="ss-item ss-item-add" data-value="${escapeHtml(addNew.value)}">${escapeHtml(addNew.label)}</div>` : '';
+    list.innerHTML = rows || addRow ? rows + addRow : '<div class="ss-item muted">ไม่พบรายการที่ตรงกัน</div>';
+    activeIndex = -1;
+    list.classList.remove('hidden');
+    list.querySelectorAll('.ss-item[data-value]').forEach((el) => {
+      el.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        pick(el.dataset.value);
+      });
+    });
+  }
+
+  input.addEventListener('focus', () => renderList(input.value));
+  input.addEventListener('input', () => renderList(input.value));
+  input.addEventListener('keydown', (e) => {
+    const items = [...list.querySelectorAll('.ss-item[data-value]')];
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      if (list.classList.contains('hidden')) { renderList(input.value); return; }
+      activeIndex = Math.min(activeIndex + 1, items.length - 1);
+      highlight();
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      activeIndex = Math.max(activeIndex - 1, 0);
+      highlight();
+    } else if (e.key === 'Enter') {
+      if (activeIndex >= 0 && items[activeIndex]) {
+        e.preventDefault();
+        pick(items[activeIndex].dataset.value);
+      }
+    } else if (e.key === 'Escape') {
+      closeList();
+    }
+  });
+  input.addEventListener('blur', () => {
+    setTimeout(() => {
+      closeList();
+      syncInputFromSelect();
+    }, 120);
+  });
+
+  syncInputFromSelect();
+  select._syncSearchable = syncInputFromSelect;
+}
+
 // ---------- Dashboard ----------
 const FORECAST_STATUS = {
   urgent: { badge: 'expired', label: 'ด่วน' },
@@ -496,6 +617,7 @@ function groupByBrand(inv) {
 }
 
 function buildInventoryBrandSectionHTML(brand, products) {
+  const isAdmin = state.user.role === 'admin';
   const lowCount = products.filter((p) => p.lowStock).length;
   const expiringCount = products.filter((p) => p.expiryStatus === 'critical' || p.expiryStatus === 'expired').length;
 
@@ -509,6 +631,7 @@ function buildInventoryBrandSectionHTML(brand, products) {
         <td>${daysUntilLabel(b.daysUntilExpiry)} <span class="muted">${b.expirationDate ? `(${fmtDate(b.expirationDate)})` : ''}</span> <span class="badge ${b.status}">${EXPIRY_STATUS_LABEL[b.status] || b.status}</span></td>
         <td class="right">${fmtNum(b.quantityRemaining)}</td>
         <td></td>
+        ${isAdmin ? `<td class="right muted">${b.unitCost != null ? fmtNum(b.unitCost) : '—'}</td>` : ''}
       </tr>`).join('');
 
     return `
@@ -518,6 +641,7 @@ function buildInventoryBrandSectionHTML(brand, products) {
         <td>${hasBatches ? daysUntilLabel(p.batches[0].daysUntilExpiry) : '—'} <span class="muted">${p.nearestExpiry ? `(${fmtDate(p.nearestExpiry)})` : ''}</span> ${hasBatches ? `<span class="badge ${p.expiryStatus}">${EXPIRY_STATUS_LABEL[p.expiryStatus] || p.expiryStatus}</span>` : ''}</td>
         <td class="right"><strong>${fmtNum(p.totalQuantity)}</strong> ${escapeHtml(p.unit)} ${p.lowStock ? '<span class="badge low">ต่ำ</span>' : ''}</td>
         <td class="muted right">จุดสั่งซื้อ @ ${fmtNum(p.reorderLevel)}</td>
+        ${isAdmin ? '<td></td>' : ''}
       </tr>
       ${batchRows}
     `;
@@ -535,7 +659,7 @@ function buildInventoryBrandSectionHTML(brand, products) {
       </div>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>สินค้า</th><th>ล็อต</th><th>วันหมดอายุที่ใกล้ที่สุด</th><th class="right">คงเหลือ</th><th class="right">จุดสั่งซื้อ</th></tr></thead>
+          <thead><tr><th>สินค้า</th><th>ล็อต</th><th>วันหมดอายุที่ใกล้ที่สุด</th><th class="right">คงเหลือ</th><th class="right">จุดสั่งซื้อ</th>${isAdmin ? '<th class="right">ต้นทุน/หน่วย</th>' : ''}</tr></thead>
           <tbody>${rows}</tbody>
         </table>
       </div>
@@ -569,10 +693,15 @@ function getHashQuery() {
 }
 
 async function renderReceive(container) {
+  if (!canCreate()) {
+    container.innerHTML = '<h2>รับสินค้าเข้า</h2><p class="msg error">คุณมีสิทธิ์ดูข้อมูลอย่างเดียว ไม่สามารถบันทึกรับสินค้าเข้าได้</p>';
+    return;
+  }
   await loadProducts();
-  await loadSuppliers();
   const claimId = getHashQuery().get('claimId');
   const claim = claimId ? await api('GET', `/api/claims/${claimId}`) : null;
+  const poId = getHashQuery().get('poId');
+  const po = poId ? await api('GET', `/api/purchase-orders/${poId}`) : null;
 
   container.innerHTML = `
     <h2>รับสินค้าเข้า</h2>
@@ -581,6 +710,13 @@ async function renderReceive(container) {
         กำลังรับคืนเข้าคลังจากรายการเคลม #${claim.id} —
         ${CLAIM_TYPE_LABEL[claim.type] || claim.type} จาก ${escapeHtml(claim.counterparty || '—')}:
         ${escapeHtml(claim.product_name)} จำนวน ${fmtNum(claim.quantity)} ${escapeHtml(claim.unit)}
+        (แบบฟอร์มด้านล่างกรอกข้อมูลเบื้องต้นให้แล้ว ตรวจสอบและระบุวันหมดอายุ/ล็อตก่อนบันทึก)
+      </div>
+    ` : ''}
+    ${po ? `
+      <div class="msg success" style="margin-bottom:16px">
+        กำลังรับเข้าคลังจากรายการสั่งซื้อ #${po.id} — ${escapeHtml(po.product_name)}
+        จำนวน ${fmtNum(po.quantity)} ${escapeHtml(po.unit)} จาก ${escapeHtml(po.supplier || '—')}
         (แบบฟอร์มด้านล่างกรอกข้อมูลเบื้องต้นให้แล้ว ตรวจสอบและระบุวันหมดอายุ/ล็อตก่อนบันทึก)
       </div>
     ` : ''}
@@ -605,29 +741,10 @@ async function renderReceive(container) {
         <label class="field">จำนวน
           <input type="number" id="rf-qty" step="any" min="0.01" required>
         </label>
-        <label class="field">ต้นทุนต่อหน่วย (ไม่บังคับ)
-          <input type="number" id="rf-cost" step="any" min="0">
-        </label>
-      </div>
-      <div class="form-row">
-        <label class="field">ซัพพลายเออร์
-          <select id="rf-supplier">
-            <option value="">— ไม่ระบุ —</option>
-            ${supplierOptions(state.suppliers)}
-            <option value="__new__">+ เพิ่มซัพพลายเออร์ใหม่…</option>
-          </select>
-        </label>
         <label class="field">วันที่รับสินค้า
           <input type="date" id="rf-date" value="${new Date().toISOString().slice(0, 10)}">
         </label>
       </div>
-      <div class="form-row hidden" id="rf-new-supplier-row">
-        <label class="field">ชื่อซัพพลายเออร์ใหม่
-          <input type="text" id="rf-new-supplier-name">
-        </label>
-        <button type="button" id="rf-add-supplier-btn" class="secondary" style="align-self:flex-end">เพิ่มซัพพลายเออร์</button>
-      </div>
-      <div id="rf-supplier-msg"></div>
       <label class="field">หมายเหตุ
         <textarea id="rf-note" rows="2"></textarea>
       </label>
@@ -656,52 +773,33 @@ async function renderReceive(container) {
     ];
     if (claim.details) noteParts.push(`— ${claim.details}`);
     document.getElementById('rf-note').value = noteParts.join(' ');
-    if (claim.type === 'supplier_claim' && state.suppliers.some((s) => s.name === claim.counterparty)) {
-      document.getElementById('rf-supplier').value = claim.counterparty;
-    }
   }
 
-  document.getElementById('rf-supplier').addEventListener('change', (e) => {
-    document.getElementById('rf-new-supplier-row').classList.toggle('hidden', e.target.value !== '__new__');
-    if (e.target.value === '__new__') document.getElementById('rf-new-supplier-name').focus();
-  });
-
-  document.getElementById('rf-add-supplier-btn').addEventListener('click', async () => {
-    const nameInput = document.getElementById('rf-new-supplier-name');
-    const supplierMsg = document.getElementById('rf-supplier-msg');
-    const name = nameInput.value.trim();
-    supplierMsg.innerHTML = '';
-    if (!name) return;
-    try {
-      await api('POST', '/api/suppliers', { name });
-      await loadSuppliers();
-      const select = document.getElementById('rf-supplier');
-      select.innerHTML = `<option value="">— ไม่ระบุ —</option>${supplierOptions(state.suppliers)}<option value="__new__">+ เพิ่มซัพพลายเออร์ใหม่…</option>`;
-      select.value = name;
-      document.getElementById('rf-new-supplier-row').classList.add('hidden');
-      nameInput.value = '';
-    } catch (err) {
-      supplierMsg.innerHTML = `<p class="msg error">${escapeHtml(err.message)}</p>`;
+  if (po) {
+    const poProduct = state.products.find((p) => p.id === po.product_id);
+    if (poProduct && poProduct.brand) {
+      document.getElementById('rf-product-supplier').value = poProduct.brand;
+      document.getElementById('rf-product-supplier').dispatchEvent(new Event('change'));
     }
-  });
+    document.getElementById('rf-product').value = po.product_id;
+    document.getElementById('rf-qty').value = po.quantity;
+    document.getElementById('rf-note').value = `รับเข้าตามรายการสั่งซื้อ #${po.id}`;
+  }
 
   document.getElementById('receive-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     const msg = document.getElementById('rf-msg');
     msg.innerHTML = '';
-    const supplierValue = document.getElementById('rf-supplier').value;
-    if (supplierValue === '__new__') {
-      msg.innerHTML = '<p class="msg error">กรุณากด "เพิ่มซัพพลายเออร์" ก่อน หรือเลือกซัพพลายเออร์ที่มีอยู่แล้ว</p>';
-      return;
-    }
     try {
+      const productId = Number(document.getElementById('rf-product').value);
+      const product = state.products.find((p) => p.id === productId);
+      const supplierValue = document.getElementById('rf-product-supplier').value || (product && product.brand) || null;
       const result = await api('POST', '/api/batches', {
-        productId: Number(document.getElementById('rf-product').value),
+        productId,
         batchNumber: document.getElementById('rf-batch').value || null,
         expirationDate: document.getElementById('rf-expiry').value || null,
         quantity: Number(document.getElementById('rf-qty').value),
-        unitCost: document.getElementById('rf-cost').value ? Number(document.getElementById('rf-cost').value) : null,
-        supplier: supplierValue || null,
+        supplier: supplierValue,
         receivedDate: document.getElementById('rf-date').value || null,
         note: document.getElementById('rf-note').value || null,
       });
@@ -711,12 +809,17 @@ async function renderReceive(container) {
           resolutionNote: `รับคืนเข้าคลังแล้ว (ล็อตใหม่ #${result.batchId})`,
         });
         msg.innerHTML = '<p class="msg success">รับสินค้าเข้าคลังเรียบร้อยแล้ว และอัปเดตสถานะเคลมเป็น "เสร็จสิ้น" แล้ว — <a href="#/claims">กลับไปหน้าเคลม/ตีกลับ</a></p>';
+      } else if (po) {
+        await api('PATCH', `/api/purchase-orders/${po.id}`, {
+          status: 'received',
+          batchId: result.batchId,
+        });
+        msg.innerHTML = '<p class="msg success">รับสินค้าเข้าคลังเรียบร้อยแล้ว และอัปเดตสถานะรายการสั่งซื้อเป็น "รับแล้ว" แล้ว — <a href="#/orders">กลับไปหน้าสั่งซื้อ</a></p>';
       } else {
         msg.innerHTML = '<p class="msg success">รับสินค้าเข้าคลังเรียบร้อยแล้ว</p>';
       }
       e.target.reset();
       document.getElementById('rf-date').value = new Date().toISOString().slice(0, 10);
-      document.getElementById('rf-new-supplier-row').classList.add('hidden');
     } catch (err) {
       msg.innerHTML = `<p class="msg error">${escapeHtml(err.message)}</p>`;
     }
@@ -725,10 +828,22 @@ async function renderReceive(container) {
 
 // ---------- Issue stock (outflow) ----------
 async function renderIssue(container) {
+  if (!canCreate()) {
+    container.innerHTML = '<h2>เบิกสินค้าออก (ขายให้ลูกค้า)</h2><p class="msg error">คุณมีสิทธิ์ดูข้อมูลอย่างเดียว ไม่สามารถบันทึกเบิกสินค้าออกได้</p>';
+    return;
+  }
   await loadProducts();
   await loadCustomers();
   container.innerHTML = `
     <h2>เบิกสินค้าออก (ขายให้ลูกค้า)</h2>
+    <div class="card">
+      <label class="field">รูปแบบการเบิกออก</label>
+      <div class="form-row">
+        <label><input type="radio" name="if-mode" id="if-mode-normal" value="normal" checked> เบิกออกปกติ</label>
+        <label><input type="radio" name="if-mode" id="if-mode-convert" value="convert"> เบิกออกแบบแปลงหมึกเป็นเบอร์อื่น</label>
+      </div>
+    </div>
+    <div id="issue-mode-normal">
     <form id="issue-form" class="stack card">
       <div class="form-row">
         <label class="field">ซัพพลายเออร์
@@ -738,6 +853,9 @@ async function renderIssue(container) {
           <select id="if-product" required>${productOptions(state.products)}</select>
         </label>
       </div>
+      <label class="field">ล็อตที่จะตัด
+        <select id="if-batch"><option value="">อัตโนมัติ (FIFO/FEFO — หมดอายุเร็วสุด/รับเข้าก่อนสุด)</option></select>
+      </label>
       <div class="form-row">
         <label class="field">จำนวน
           <input type="number" id="if-qty" step="any" min="0.01" required>
@@ -754,11 +872,15 @@ async function renderIssue(container) {
           </select>
         </label>
         <label class="field">ลูกค้า
-          <select id="if-customer">
-            <option value="">— ไม่ระบุ —</option>
-            ${customerOptions(state.customers)}
-            <option value="__new__">+ เพิ่มลูกค้าใหม่…</option>
-          </select>
+          <div class="searchable-select">
+            <input type="text" class="ss-input" id="if-customer-search" placeholder="พิมพ์เพื่อค้นหาลูกค้า..." autocomplete="off">
+            <div class="ss-list hidden" id="if-customer-list"></div>
+            <select id="if-customer" class="hidden">
+              <option value="">— ไม่ระบุ —</option>
+              ${customerOptions(state.customers)}
+              <option value="__new__">+ เพิ่มลูกค้าใหม่…</option>
+            </select>
+          </div>
         </label>
       </div>
       <div class="form-row hidden" id="if-new-customer-row">
@@ -768,21 +890,85 @@ async function renderIssue(container) {
         <button type="button" id="if-add-customer-btn" class="secondary" style="align-self:flex-end">เพิ่มลูกค้า</button>
       </div>
       <div id="if-customer-msg"></div>
+      <label class="field">เลขใบเบิกสินค้า
+        <input type="text" id="if-req-no" placeholder="ไม่บังคับ">
+      </label>
       <label class="field">หมายเหตุ
         <textarea id="if-note" rows="2"></textarea>
       </label>
-      <button type="button" id="if-preview-btn" class="secondary">ดูตัวอย่างการจัดสรร (FEFO)</button>
       <div id="if-preview"></div>
       <button type="submit" class="primary">ยืนยันการเบิกออก</button>
       <div id="if-msg"></div>
     </form>
+    </div>
   `;
+
+  document.querySelectorAll('input[name="if-mode"]').forEach((radio) => {
+    radio.addEventListener('change', () => {
+      const mode = document.querySelector('input[name="if-mode"]:checked').value;
+      document.getElementById('issue-mode-normal').classList.toggle('hidden', mode !== 'normal');
+      document.getElementById('issue-mode-convert').classList.toggle('hidden', mode !== 'convert');
+    });
+  });
+
+  let issueBatches = [];
+  async function refreshIssueBatches() {
+    const productId = document.getElementById('if-product').value;
+    const batchSelect = document.getElementById('if-batch');
+    batchSelect.innerHTML = '<option value="">อัตโนมัติ (FIFO/FEFO — หมดอายุเร็วสุด/รับเข้าก่อนสุด)</option>';
+    issueBatches = [];
+    if (!productId) return;
+    issueBatches = (await api('GET', `/api/batches/product/${productId}`)).filter((b) => b.quantity_remaining > 0);
+    batchSelect.innerHTML += issueBatches
+      .map((b) => `<option value="${b.id}">${escapeHtml(b.batch_number || `ล็อต ${b.id}`)} — เหลือ ${fmtNum(b.quantity_remaining)} — หมดอายุ ${fmtDate(b.expiration_date)} — รับเข้า ${fmtDate(b.received_date)}</option>`)
+      .join('');
+  }
 
   async function preview() {
     const productId = document.getElementById('if-product').value;
     const qty = Number(document.getElementById('if-qty').value);
+    const selectedBatchId = document.getElementById('if-batch').value;
     const previewEl = document.getElementById('if-preview');
-    if (!productId || !qty) { previewEl.innerHTML = ''; return; }
+    if (!productId) { previewEl.innerHTML = ''; return; }
+
+    if (selectedBatchId) {
+      // Manual override — user picked a specific lot instead of letting FIFO/FEFO decide.
+      const batch = issueBatches.find((b) => String(b.id) === selectedBatchId);
+      if (!batch) { previewEl.innerHTML = ''; return; }
+      const allocated = qty ? Math.min(batch.quantity_remaining, qty) : batch.quantity_remaining;
+      const shortfall = qty ? Math.max(0, qty - batch.quantity_remaining) : 0;
+      previewEl.innerHTML = `
+        <div class="card">
+          <p><span class="badge warning">เลือกล็อตเอง</span>
+             ${qty ? (shortfall ? `<span class="badge expired">ขาด ${fmtNum(shortfall)}</span>` : '<span class="badge ok">เพียงพอ</span>') : ''}
+             คงเหลือในล็อตนี้: ${fmtNum(batch.quantity_remaining)}</p>
+          <table><thead><tr><th>ล็อต</th><th>วันหมดอายุ</th><th class="right">จะใช้</th></tr></thead>
+          <tbody><tr><td>ล็อต ${escapeHtml(batch.batch_number || batch.id)}</td><td>${fmtDate(batch.expiration_date)}</td><td class="right">${fmtNum(allocated)}</td></tr></tbody></table>
+        </div>`;
+      return;
+    }
+
+    if (!qty) {
+      // No quantity yet — just show which lots exist for this product, in the order FEFO would take them.
+      try {
+        const batches = (await api('GET', `/api/batches/product/${productId}`)).filter((b) => b.quantity_remaining > 0);
+        const rows = batches.map((b) => `
+          <tr>
+            <td>ล็อต ${escapeHtml(b.batch_number || b.id)}</td>
+            <td>${fmtDate(b.expiration_date)}</td>
+            <td class="right">${fmtNum(b.quantity_remaining)}</td>
+          </tr>`).join('');
+        previewEl.innerHTML = `
+          <div class="card">
+            <p class="muted">ล็อตที่มีอยู่สำหรับสินค้านี้ (เรียงลำดับที่จะถูกตัดก่อน — หมดอายุเร็วสุด/รับเข้าก่อนสุด) — กรอกจำนวนเพื่อดูว่าจะตัดจากล็อตไหนบ้าง</p>
+            <table><thead><tr><th>ล็อต</th><th>วันหมดอายุ</th><th class="right">คงเหลือ</th></tr></thead><tbody>${rows || '<tr><td colspan="3" class="muted">ไม่มีสต็อกคงเหลือ</td></tr>'}</tbody></table>
+          </div>`;
+      } catch (err) {
+        previewEl.innerHTML = `<p class="msg error">${escapeHtml(err.message)}</p>`;
+      }
+      return;
+    }
+
     try {
       const p = await api('GET', `/api/outflow/preview?productId=${productId}&quantity=${qty}`);
       const rows = p.allocation.map((a) => `
@@ -790,7 +976,7 @@ async function renderIssue(container) {
           <td>ล็อต ${escapeHtml(a.batchNumber || a.batchId)}</td>
           <td class="if-exp-cell">
             <span class="if-exp-display">${fmtDate(a.expirationDate)}</span>
-            <button type="button" class="secondary if-edit-exp">แก้ไขวันหมดอายุ</button>
+            ${canEdit() ? '<button type="button" class="secondary if-edit-exp">แก้ไขวันหมดอายุ</button>' : ''}
           </td>
           <td class="right">${fmtNum(a.allocated)}</td>
         </tr>
@@ -828,13 +1014,23 @@ async function renderIssue(container) {
     }
   }
 
-  document.getElementById('if-preview-btn').addEventListener('click', preview);
+  document.getElementById('if-product').addEventListener('change', async () => {
+    await refreshIssueBatches();
+    await preview();
+  });
+  document.getElementById('if-batch').addEventListener('change', preview);
+  document.getElementById('if-qty').addEventListener('input', preview);
   wireSupplierProductCascade(
     document.getElementById('if-product-supplier'),
     document.getElementById('if-product'),
     state.products
   );
+  if (state.products.length) {
+    await refreshIssueBatches();
+    await preview();
+  }
 
+  wireSearchableSelect('if-customer', { newNameInputId: 'if-new-customer-name' });
   document.getElementById('if-customer').addEventListener('change', (e) => {
     document.getElementById('if-new-customer-row').classList.toggle('hidden', e.target.value !== '__new__');
     if (e.target.value === '__new__') document.getElementById('if-new-customer-name').focus();
@@ -852,6 +1048,7 @@ async function renderIssue(container) {
       const select = document.getElementById('if-customer');
       select.innerHTML = `<option value="">— ไม่ระบุ —</option>${customerOptions(state.customers)}<option value="__new__">+ เพิ่มลูกค้าใหม่…</option>`;
       select.value = name;
+      select._syncSearchable();
       document.getElementById('if-new-customer-row').classList.add('hidden');
       nameInput.value = '';
     } catch (err) {
@@ -877,22 +1074,25 @@ async function renderIssue(container) {
         transactionDate: document.getElementById('if-date').value || null,
         note: document.getElementById('if-note').value || null,
         purpose,
+        requisitionNo: document.getElementById('if-req-no').value || null,
+        batchId: document.getElementById('if-batch').value || null,
       });
       const purposeNote = purpose === 'trial' ? ' (บันทึกเป็นรายการให้ทดลอง/ตัวอย่าง)' : '';
       msg.innerHTML = `<p class="msg success">เบิกออกสำเร็จ จาก ${result.allocation.length} ล็อต${purposeNote}</p>`;
-      document.getElementById('if-preview').innerHTML = '';
       e.target.reset();
       document.getElementById('if-date').value = new Date().toISOString().slice(0, 10);
       document.getElementById('if-new-customer-row').classList.add('hidden');
+      await refreshIssueBatches();
+      await preview();
     } catch (err) {
       msg.innerHTML = `<p class="msg error">${escapeHtml(err.message)}</p>`;
     }
   });
 
-  // ---- Convert ink to another SKU ----
+  // ---- Convert ink to another SKU (also a form of issuing stock out) ----
   container.insertAdjacentHTML('beforeend', `
-    <div class="card">
-      <h3>แปลงหมึกเป็นเบอร์อื่น</h3>
+    <div id="issue-mode-convert" class="card hidden">
+      <h3>เบิกออกแบบแปลงหมึกเป็นเบอร์อื่น</h3>
       <p class="muted">ใช้เมื่อนำหมึกเบอร์หนึ่งไปแปลง/บรรจุใหม่เป็นอีกเบอร์หนึ่งก่อนส่งให้ลูกค้า
         ระบบจะตัดสต็อกจากสินค้าต้นทางและสร้างล็อตใหม่ให้สินค้าปลายทางให้อัตโนมัติ</p>
       <form id="conv-form" class="stack">
@@ -923,7 +1123,7 @@ async function renderIssue(container) {
             <select id="cv-dest-product" required>${productOptions(state.products)}</select>
           </label>
         </div>
-        <div class="form-row">
+        <div class="form-row align-end">
           <label class="field">วันหมดอายุใหม่ (ถ้าไม่ระบุจะใช้ของล็อตเดิม)
             <input type="date" id="cv-dest-expiry">
           </label>
@@ -931,6 +1131,24 @@ async function renderIssue(container) {
             <input type="text" id="cv-dest-batch" placeholder="สร้างอัตโนมัติถ้าไม่ระบุ">
           </label>
         </div>
+        <label class="field">ลูกค้า (ไม่บังคับ)
+          <div class="searchable-select">
+            <input type="text" class="ss-input" id="cv-customer-search" placeholder="พิมพ์เพื่อค้นหาลูกค้า..." autocomplete="off">
+            <div class="ss-list hidden" id="cv-customer-list"></div>
+            <select id="cv-customer" class="hidden">
+              <option value="">— ไม่ระบุ —</option>
+              ${customerOptions(state.customers)}
+              <option value="__new__">+ เพิ่มลูกค้าใหม่…</option>
+            </select>
+          </div>
+        </label>
+        <div class="form-row hidden" id="cv-new-customer-row">
+          <label class="field">ชื่อลูกค้าใหม่
+            <input type="text" id="cv-new-customer-name">
+          </label>
+          <button type="button" id="cv-add-customer-btn" class="secondary" style="align-self:flex-end">เพิ่มลูกค้า</button>
+        </div>
+        <div id="cv-customer-msg"></div>
         <label class="field">หมายเหตุ
           <textarea id="cv-note" rows="2"></textarea>
         </label>
@@ -964,10 +1182,41 @@ async function renderIssue(container) {
   );
   if (state.products.length) await refreshSourceBatches();
 
+  wireSearchableSelect('cv-customer', { newNameInputId: 'cv-new-customer-name' });
+  document.getElementById('cv-customer').addEventListener('change', (e) => {
+    document.getElementById('cv-new-customer-row').classList.toggle('hidden', e.target.value !== '__new__');
+    if (e.target.value === '__new__') document.getElementById('cv-new-customer-name').focus();
+  });
+
+  document.getElementById('cv-add-customer-btn').addEventListener('click', async () => {
+    const nameInput = document.getElementById('cv-new-customer-name');
+    const customerMsg = document.getElementById('cv-customer-msg');
+    const name = nameInput.value.trim();
+    customerMsg.innerHTML = '';
+    if (!name) return;
+    try {
+      await api('POST', '/api/customers', { name });
+      await loadCustomers();
+      const select = document.getElementById('cv-customer');
+      select.innerHTML = `<option value="">— ไม่ระบุ —</option>${customerOptions(state.customers)}<option value="__new__">+ เพิ่มลูกค้าใหม่…</option>`;
+      select.value = name;
+      select._syncSearchable();
+      document.getElementById('cv-new-customer-row').classList.add('hidden');
+      nameInput.value = '';
+    } catch (err) {
+      customerMsg.innerHTML = `<p class="msg error">${escapeHtml(err.message)}</p>`;
+    }
+  });
+
   document.getElementById('conv-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     const msg = document.getElementById('cv-msg');
     msg.innerHTML = '';
+    const customerValue = document.getElementById('cv-customer').value;
+    if (customerValue === '__new__') {
+      msg.innerHTML = '<p class="msg error">กรุณากด "เพิ่มลูกค้า" ก่อน หรือเลือกลูกค้าที่มีอยู่แล้ว</p>';
+      return;
+    }
     try {
       await api('POST', '/api/outflow/convert', {
         sourceProductId: Number(document.getElementById('cv-source-product').value),
@@ -978,10 +1227,12 @@ async function renderIssue(container) {
         destBatchNumber: document.getElementById('cv-dest-batch').value || null,
         conversionDate: document.getElementById('cv-date').value || null,
         note: document.getElementById('cv-note').value || null,
+        customer: customerValue || null,
       });
       msg.innerHTML = '<p class="msg success">แปลงหมึกเรียบร้อยแล้ว</p>';
       e.target.reset();
       document.getElementById('cv-date').value = new Date().toISOString().slice(0, 10);
+      document.getElementById('cv-new-customer-row').classList.add('hidden');
       await refreshSourceBatches();
     } catch (err) {
       msg.innerHTML = `<p class="msg error">${escapeHtml(err.message)}</p>`;
@@ -1041,9 +1292,14 @@ async function renderHistory(container) {
   }
 
   async function load() {
+    const isAdmin = state.user.role === 'admin';
     const rows = await api('GET', `/api/transactions?${currentQuery()}`);
-    const body = rows.map((t) => `
-      <tr>
+    const colCount = isAdmin ? 13 : 11;
+    const body = rows.map((t) => {
+      const rowEditable = (t.type === 'IN' || t.type === 'OUT') && canEdit();
+      const editRowId = `hf-edit-${t.id}`;
+      const mainRow = `
+      <tr class="${rowEditable ? 'inv-toggle-row' : ''}" ${rowEditable ? `data-toggle="${editRowId}"` : ''}>
         <td>${fmtDate(t.transaction_date)}</td>
         <td>${TYPE_LABEL[t.type] || t.type}${t.type === 'OUT' && t.purpose === 'trial' ? ' <span class="badge critical">ทดลอง/ตัวอย่าง</span>' : ''}</td>
         <td>${escapeHtml(t.product_name)} <span class="muted">(${escapeHtml(t.sku_code)})</span></td>
@@ -1051,14 +1307,118 @@ async function renderHistory(container) {
         <td>${fmtDate(t.expiration_date)}</td>
         <td class="right">${fmtNum(t.quantity)} ${escapeHtml(t.unit)}</td>
         <td>${escapeHtml(t.counterparty || '')}</td>
+        <td class="muted">${escapeHtml(t.requisition_no || '')}</td>
         <td class="muted">${escapeHtml(t.user_name || '')}</td>
         <td class="muted">${escapeHtml(t.note || '')}</td>
-      </tr>`).join('');
+        ${isAdmin ? `<td class="right">${t.unit_price != null ? fmtNum(t.unit_price) : '—'}</td><td class="right">${t.unit_price != null ? fmtNum(t.unit_price * t.quantity) : '—'}</td>` : ''}
+        <td>${rowEditable ? '<span class="inv-chevron">▸</span> แก้ไข' : ''}</td>
+      </tr>`;
+      if (!rowEditable) return mainRow;
+      const editRow = `
+      <tr class="hidden" data-parent="${editRowId}">
+        <td colspan="${colCount}">
+          <form class="hf-edit-form stack" data-id="${t.id}" data-type="${t.type}" data-batch-id="${t.batch_id}" style="max-width:640px;margin:8px 0">
+            ${t.type === 'IN' ? `
+            <div class="form-row">
+              <label class="field">หมายเลขล็อต
+                <input type="text" class="hfe-batch-number" value="${escapeHtml(t.batch_number || '')}">
+              </label>
+              <label class="field">วันหมดอายุ
+                <input type="date" class="hfe-expiry" value="${t.expiration_date || ''}">
+              </label>
+            </div>` : ''}
+            <div class="form-row">
+              <label class="field">จำนวน
+                <input type="number" class="hfe-qty" step="any" min="0.01" value="${t.quantity}" required>
+              </label>
+              <label class="field">วันที่
+                <input type="date" class="hfe-date" value="${t.transaction_date}" required>
+              </label>
+            </div>
+            <div class="form-row">
+              <label class="field">${t.type === 'IN' ? 'ซัพพลายเออร์' : 'ลูกค้า'}
+                <input type="text" class="hfe-counterparty" value="${escapeHtml(t.counterparty || '')}">
+              </label>
+              ${t.type === 'OUT' ? `
+              <label class="field">เลขใบเบิกสินค้า
+                <input type="text" class="hfe-req-no" value="${escapeHtml(t.requisition_no || '')}">
+              </label>` : ''}
+            </div>
+            ${t.type === 'OUT' ? `
+            <label class="field">วัตถุประสงค์
+              <select class="hfe-purpose">
+                <option value="sale" ${t.purpose === 'sale' ? 'selected' : ''}>ขายให้ลูกค้า</option>
+                <option value="trial" ${t.purpose === 'trial' ? 'selected' : ''}>ให้ทดลอง/ตัวอย่าง</option>
+              </select>
+            </label>` : ''}
+            <label class="field">หมายเหตุ
+              <textarea class="hfe-note" rows="2">${escapeHtml(t.note || '')}</textarea>
+            </label>
+            <div class="form-row">
+              <button type="submit" class="primary">บันทึกการแก้ไข</button>
+              <button type="button" class="secondary hfe-cancel">ยกเลิก</button>
+            </div>
+            <div class="hfe-msg"></div>
+          </form>
+        </td>
+      </tr>`;
+      return mainRow + editRow;
+    }).join('');
     document.getElementById('hf-table').innerHTML = `
       <table>
-        <thead><tr><th>วันที่</th><th>ประเภท</th><th>สินค้า</th><th>ล็อต</th><th>วันหมดอายุ</th><th class="right">จำนวน</th><th>ลูกค้า/ซัพพลายเออร์</th><th>โดย</th><th>หมายเหตุ</th></tr></thead>
-        <tbody>${body || '<tr><td colspan="9" class="muted">ไม่พบรายการที่ตรงกัน</td></tr>'}</tbody>
+        <thead><tr><th>วันที่</th><th>ประเภท</th><th>สินค้า</th><th>ล็อต</th><th>วันหมดอายุ</th><th class="right">จำนวน</th><th>ลูกค้า/ซัพพลายเออร์</th><th>เลขใบเบิก</th><th>โดย</th><th>หมายเหตุ</th>${isAdmin ? '<th class="right">ราคา/หน่วย</th><th class="right">มูลค่ารวม</th>' : ''}<th></th></tr></thead>
+        <tbody>${body || `<tr><td colspan="${colCount}" class="muted">ไม่พบรายการที่ตรงกัน</td></tr>`}</tbody>
       </table>`;
+
+    document.querySelectorAll('#hf-table .inv-toggle-row').forEach((row) => {
+      row.addEventListener('click', () => {
+        const id = row.dataset.toggle;
+        const expanding = row.classList.toggle('expanded');
+        document.querySelectorAll(`#hf-table [data-parent="${id}"]`).forEach((r) => r.classList.toggle('hidden', !expanding));
+      });
+    });
+    document.querySelectorAll('#hf-table .hfe-cancel').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const tr = btn.closest('tr');
+        tr.classList.add('hidden');
+        const toggleRow = document.querySelector(`#hf-table .inv-toggle-row[data-toggle="${tr.dataset.parent}"]`);
+        if (toggleRow) toggleRow.classList.remove('expanded');
+      });
+    });
+    document.querySelectorAll('#hf-table .hf-edit-form').forEach((form) => {
+      form.addEventListener('click', (e) => e.stopPropagation());
+      form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const msg = form.querySelector('.hfe-msg');
+        msg.innerHTML = '';
+        const { id, type, batchId } = form.dataset;
+        try {
+          if (type === 'IN') {
+            await api('PATCH', `/api/batches/${batchId}`, {
+              batchNumber: form.querySelector('.hfe-batch-number').value || null,
+              expirationDate: form.querySelector('.hfe-expiry').value || null,
+              quantity: Number(form.querySelector('.hfe-qty').value),
+              supplier: form.querySelector('.hfe-counterparty').value || null,
+              receivedDate: form.querySelector('.hfe-date').value || null,
+              note: form.querySelector('.hfe-note').value || null,
+            });
+          } else {
+            await api('PATCH', `/api/transactions/${id}`, {
+              quantity: Number(form.querySelector('.hfe-qty').value),
+              transactionDate: form.querySelector('.hfe-date').value || null,
+              counterparty: form.querySelector('.hfe-counterparty').value || null,
+              note: form.querySelector('.hfe-note').value || null,
+              purpose: form.querySelector('.hfe-purpose').value,
+              requisitionNo: form.querySelector('.hfe-req-no').value || null,
+            });
+          }
+          await load();
+        } catch (err) {
+          msg.innerHTML = `<p class="msg error">${escapeHtml(err.message)}</p>`;
+        }
+      });
+    });
   }
 
   document.getElementById('hf-apply').addEventListener('click', load);
@@ -1105,14 +1465,14 @@ function buildClaimsTableHTML(claims) {
       <td class="right">${fmtNum(c.quantity)} ${escapeHtml(c.unit)}</td>
       <td>${escapeHtml(c.counterparty || '—')}</td>
       <td class="muted">${CLAIM_CATEGORY_LABEL[c.category] || c.category}<br>${escapeHtml(c.details || '')}</td>
-      <td><select class="cl-status" data-id="${c.id}">${claimStatusOptions(c.status)}</select></td>
-      <td><input type="text" class="cl-resolution" data-id="${c.id}" value="${escapeHtml(c.resolution_note || '')}" placeholder="บันทึกผลการดำเนินการ"></td>
-      <td>
+      <td data-requires="edit"><select class="cl-status" data-id="${c.id}">${claimStatusOptions(c.status)}</select></td>
+      <td data-requires="edit"><input type="text" class="cl-resolution" data-id="${c.id}" value="${escapeHtml(c.resolution_note || '')}" placeholder="บันทึกผลการดำเนินการ"></td>
+      <td data-requires="edit">
         <input type="text" class="cl-redirect-to" data-id="${c.id}" value="${escapeHtml(c.redirected_to || '')}" placeholder="ชื่อลูกค้าที่ได้รับแทน" style="margin-bottom:4px">
         <input type="number" class="cl-redirect-qty" data-id="${c.id}" value="${c.redirected_quantity ?? ''}" placeholder="จำนวนที่ส่งต่อ" step="any" min="0">
       </td>
       <td class="muted">${escapeHtml(c.user_name || '')}</td>
-      <td><a href="#/receive?claimId=${c.id}" class="secondary" style="display:inline-block;text-decoration:none;padding:6px 10px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:12.5px;white-space:nowrap">รับคืนเข้าคลัง</a></td>
+      <td data-requires="create"><a href="#/receive?claimId=${c.id}" class="secondary" style="display:inline-block;text-decoration:none;padding:6px 10px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:12.5px;white-space:nowrap">รับคืนเข้าคลัง</a></td>
     </tr>`).join('');
 
   return `
@@ -1140,7 +1500,7 @@ async function renderClaims(container) {
       หากนำตลับที่ถูกตีกลับจากลูกค้าเจ้าหนึ่งไปส่งให้ลูกค้าอีกเจ้าแทน (โดยไม่ผ่านคลัง)
       ให้บันทึกชื่อลูกค้าและจำนวนที่ช่อง "ส่งต่อให้ลูกค้าอื่น" ในตารางด้านล่างของรายการนั้น
     </p>
-    <div class="card">
+    <div class="card" data-requires="create">
       <h3>บันทึกรายการใหม่</h3>
       <form id="cf-form" class="stack">
         <label class="field">ประเภทรายการ
@@ -1289,10 +1649,213 @@ async function renderClaims(container) {
         }
       });
     });
+    applyPermissionGates(container);
   }
 
   document.getElementById('clf-apply').addEventListener('click', loadClaims);
   await loadClaims();
+}
+
+// ---------- Purchase orders (ordered, not yet arrived) ----------
+const PO_STATUS_LABEL = { pending: 'รอสินค้าเข้า', received: 'รับแล้ว', cancelled: 'ยกเลิก' };
+
+function poStatusOptions(selected) {
+  return Object.entries(PO_STATUS_LABEL)
+    .map(([v, l]) => `<option value="${v}" ${v === selected ? 'selected' : ''}>${l}</option>`).join('');
+}
+
+function buildOrdersTableHTML(orders) {
+  const rows = orders.map((o) => `
+    <tr>
+      <td>${fmtDate(o.order_date)}</td>
+      <td>${escapeHtml(o.product_name)} <span class="muted">(${escapeHtml(o.sku_code)})</span></td>
+      <td>${escapeHtml(o.supplier || '—')}</td>
+      <td class="right">${fmtNum(o.quantity)} ${escapeHtml(o.unit)}</td>
+      <td data-requires="edit"><input type="date" class="po-expected" data-id="${o.id}" value="${o.expected_date || ''}" ${o.status !== 'pending' ? 'disabled' : ''}></td>
+      <td data-requires="edit"><select class="po-status" data-id="${o.id}" ${o.status === 'received' ? 'disabled' : ''}>${poStatusOptions(o.status)}</select></td>
+      <td data-requires="edit"><input type="text" class="po-note" data-id="${o.id}" value="${escapeHtml(o.note || '')}" placeholder="หมายเหตุ" ${o.status !== 'pending' ? 'disabled' : ''}></td>
+      <td class="muted">${escapeHtml(o.user_name || '')}</td>
+      <td data-requires="create">${o.status === 'pending' ? `<a href="#/receive?poId=${o.id}" class="secondary" style="display:inline-block;text-decoration:none;padding:6px 10px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:12.5px;white-space:nowrap">รับเข้าคลัง</a>` : '<span class="muted">—</span>'}</td>
+    </tr>`).join('');
+
+  return `
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>วันที่สั่ง</th><th>สินค้า</th><th>ซัพพลายเออร์</th><th class="right">จำนวน</th>
+            <th>คาดว่าจะถึง</th><th>สถานะ</th><th>หมายเหตุ</th><th>บันทึกโดย</th><th></th>
+          </tr>
+        </thead>
+        <tbody>${rows || '<tr><td colspan="9" class="muted">ยังไม่มีรายการสั่งซื้อ</td></tr>'}</tbody>
+      </table>
+    </div>`;
+}
+
+async function renderOrders(container) {
+  await loadProducts();
+  await loadSuppliers();
+  container.innerHTML = `
+    <h2>สั่งซื้อ (ของที่สั่งไปแล้วกำลังเข้า)</h2>
+    <p class="muted">บันทึกรายการที่สั่งซื้อจากซัพพลายเออร์ไว้ล่วงหน้า เพื่อติดตามว่าอะไรกำลังจะเข้าคลัง
+      เมื่อของมาถึงจริง กดปุ่ม "รับเข้าคลัง" เพื่อไปหน้ารับสินค้าเข้าพร้อมข้อมูลกรอกให้อัตโนมัติ</p>
+    <div class="card" data-requires="create">
+      <h3>สั่งซื้อรายการใหม่</h3>
+      <form id="of-form" class="stack">
+        <div class="form-row">
+          <label class="field">ซัพพลายเออร์
+            <select id="of-product-supplier">${brandFilterOptionsHTML(state.products)}</select>
+          </label>
+          <label class="field">สินค้า
+            <select id="of-product" required>${productOptions(state.products)}</select>
+          </label>
+        </div>
+        <div class="form-row">
+          <label class="field">จำนวนที่สั่ง
+            <input type="number" id="of-qty" step="any" min="0.01" required>
+          </label>
+          <label class="field">วันที่สั่งซื้อ
+            <input type="date" id="of-date" value="${new Date().toISOString().slice(0, 10)}">
+          </label>
+        </div>
+        <div class="form-row">
+          <label class="field">ซัพพลายเออร์ที่สั่ง
+            <select id="of-supplier">
+              <option value="">— ไม่ระบุ —</option>
+              ${supplierOptions(state.suppliers)}
+              <option value="__new__">+ เพิ่มซัพพลายเออร์ใหม่…</option>
+            </select>
+          </label>
+          <label class="field">คาดว่าจะถึง (ไม่บังคับ)
+            <input type="date" id="of-expected">
+          </label>
+        </div>
+        <div class="form-row hidden" id="of-new-supplier-row">
+          <label class="field">ชื่อซัพพลายเออร์ใหม่
+            <input type="text" id="of-new-supplier-name">
+          </label>
+          <button type="button" id="of-add-supplier-btn" class="secondary" style="align-self:flex-end">เพิ่มซัพพลายเออร์</button>
+        </div>
+        <div id="of-supplier-msg"></div>
+        <label class="field">หมายเหตุ
+          <textarea id="of-note" rows="2"></textarea>
+        </label>
+        <button type="submit" class="primary">บันทึกรายการสั่งซื้อ</button>
+        <div id="of-msg"></div>
+      </form>
+    </div>
+    <div class="card">
+      <div class="filters">
+        <label class="field">สถานะ
+          <select id="off-status">
+            <option value="">ทั้งหมด</option>
+            ${Object.entries(PO_STATUS_LABEL).map(([v, l]) => `<option value="${v}">${l}</option>`).join('')}
+          </select>
+        </label>
+        <button id="off-apply" class="secondary">กรอง</button>
+      </div>
+      <div class="table-wrap" id="of-table"><p class="muted">กำลังโหลด…</p></div>
+    </div>
+  `;
+
+  wireSupplierProductCascade(
+    document.getElementById('of-product-supplier'),
+    document.getElementById('of-product'),
+    state.products
+  );
+
+  document.getElementById('of-supplier').addEventListener('change', (e) => {
+    document.getElementById('of-new-supplier-row').classList.toggle('hidden', e.target.value !== '__new__');
+    if (e.target.value === '__new__') document.getElementById('of-new-supplier-name').focus();
+  });
+
+  document.getElementById('of-add-supplier-btn').addEventListener('click', async () => {
+    const nameInput = document.getElementById('of-new-supplier-name');
+    const supplierMsg = document.getElementById('of-supplier-msg');
+    const name = nameInput.value.trim();
+    supplierMsg.innerHTML = '';
+    if (!name) return;
+    try {
+      await api('POST', '/api/suppliers', { name });
+      await loadSuppliers();
+      const select = document.getElementById('of-supplier');
+      select.innerHTML = `<option value="">— ไม่ระบุ —</option>${supplierOptions(state.suppliers)}<option value="__new__">+ เพิ่มซัพพลายเออร์ใหม่…</option>`;
+      select.value = name;
+      document.getElementById('of-new-supplier-row').classList.add('hidden');
+      nameInput.value = '';
+    } catch (err) {
+      supplierMsg.innerHTML = `<p class="msg error">${escapeHtml(err.message)}</p>`;
+    }
+  });
+
+  document.getElementById('of-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const msg = document.getElementById('of-msg');
+    msg.innerHTML = '';
+    const supplierValue = document.getElementById('of-supplier').value;
+    if (supplierValue === '__new__') {
+      msg.innerHTML = '<p class="msg error">กรุณากด "เพิ่มซัพพลายเออร์" ก่อน หรือเลือกซัพพลายเออร์ที่มีอยู่แล้ว</p>';
+      return;
+    }
+    try {
+      await api('POST', '/api/purchase-orders', {
+        productId: Number(document.getElementById('of-product').value),
+        quantity: Number(document.getElementById('of-qty').value),
+        orderDate: document.getElementById('of-date').value || null,
+        expectedDate: document.getElementById('of-expected').value || null,
+        supplier: supplierValue || null,
+        note: document.getElementById('of-note').value || null,
+      });
+      msg.innerHTML = '<p class="msg success">บันทึกรายการสั่งซื้อเรียบร้อยแล้ว</p>';
+      e.target.reset();
+      document.getElementById('of-date').value = new Date().toISOString().slice(0, 10);
+      document.getElementById('of-new-supplier-row').classList.add('hidden');
+      await loadOrders();
+    } catch (err) {
+      msg.innerHTML = `<p class="msg error">${escapeHtml(err.message)}</p>`;
+    }
+  });
+
+  async function loadOrders() {
+    const params = new URLSearchParams();
+    const status = document.getElementById('off-status').value;
+    if (status) params.set('status', status);
+    const orders = await api('GET', `/api/purchase-orders?${params.toString()}`);
+    document.getElementById('of-table').innerHTML = buildOrdersTableHTML(orders);
+
+    document.querySelectorAll('.po-status').forEach((sel) => {
+      sel.addEventListener('change', async () => {
+        try {
+          await api('PATCH', `/api/purchase-orders/${sel.dataset.id}`, { status: sel.value });
+          await loadOrders();
+        } catch (err) {
+          alert(err.message);
+        }
+      });
+    });
+    document.querySelectorAll('.po-expected').forEach((input) => {
+      input.addEventListener('change', async () => {
+        try {
+          await api('PATCH', `/api/purchase-orders/${input.dataset.id}`, { expectedDate: input.value });
+        } catch (err) {
+          alert(err.message);
+        }
+      });
+    });
+    document.querySelectorAll('.po-note').forEach((input) => {
+      input.addEventListener('change', async () => {
+        try {
+          await api('PATCH', `/api/purchase-orders/${input.dataset.id}`, { note: input.value });
+        } catch (err) {
+          alert(err.message);
+        }
+      });
+    });
+    applyPermissionGates(container);
+  }
+
+  document.getElementById('off-apply').addEventListener('click', loadOrders);
+  await loadOrders();
 }
 
 // ---------- Products ----------
@@ -1305,15 +1868,15 @@ async function renderProducts(container) {
       <td>${escapeHtml(p.name)}</td>
       <td>${escapeHtml(p.brand || '')}</td>
       <td>${escapeHtml(p.unit)}</td>
-      <td><input type="number" class="pf-reorder-level" data-id="${p.id}" value="${p.reorder_level}" step="any" min="0" style="width:80px"></td>
-      <td><input type="number" class="pf-leadtime" data-id="${p.id}" value="${p.lead_time_days}" min="0" style="width:70px"></td>
+      <td data-requires="edit"><input type="number" class="pf-reorder-level" data-id="${p.id}" value="${p.reorder_level}" step="any" min="0" style="width:80px"></td>
+      <td data-requires="edit"><input type="number" class="pf-leadtime" data-id="${p.id}" value="${p.lead_time_days}" min="0" style="width:70px"></td>
       <td>${p.archived ? '<span class="badge low">เก็บถาวร</span>' : '<span class="badge ok">ใช้งานอยู่</span>'}</td>
       <td>${isAdmin ? `<button class="secondary toggle-archive" data-id="${p.id}" data-archived="${p.archived}">${p.archived ? 'เลิกเก็บถาวร' : 'เก็บถาวร'}</button>` : ''}</td>
     </tr>`).join('');
 
   container.innerHTML = `
     <h2>สินค้า</h2>
-    <div class="card">
+    <div class="card" data-requires="create">
       <h3>เพิ่ม SKU หมึกใหม่</h3>
       <form id="pf-form" class="stack">
         <div class="form-row">
@@ -1391,19 +1954,13 @@ async function renderProducts(container) {
       route();
     });
   });
+
+  applyPermissionGates(container);
 }
 
 // ---------- Customers ----------
-function userSelectOptionsHTML(users, selectedId) {
-  const opts = users.map((u) => `<option value="${u.id}" ${u.id === selectedId ? 'selected' : ''}>${escapeHtml(u.display_name)}</option>`).join('');
-  return `<option value="">— ไม่ระบุ —</option>${opts}`;
-}
-
 async function renderCustomers(container) {
-  const [customers, staffUsers] = await Promise.all([
-    api('GET', '/api/customers?includeArchived=1'),
-    api('GET', '/api/users/basic'),
-  ]);
+  const customers = await api('GET', '/api/customers?includeArchived=1');
 
   const rows = customers.map((c) => `
     <tr>
@@ -1411,14 +1968,14 @@ async function renderCustomers(container) {
       <td>${escapeHtml(c.phone || '')}</td>
       <td>${escapeHtml(c.contact_person || '')}</td>
       <td class="muted">${escapeHtml(c.address || '')}</td>
-      <td><select class="cu-assigned" data-id="${c.id}">${userSelectOptionsHTML(staffUsers, c.assigned_user_id)}</select></td>
+      <td data-requires="edit"><input type="text" class="cu-assigned" data-id="${c.id}" value="${escapeHtml(c.assigned_to || '')}" placeholder="ไม่ระบุ"></td>
       <td>${c.archived ? '<span class="badge low">เก็บถาวร</span>' : '<span class="badge ok">ใช้งานอยู่</span>'}</td>
-      <td><button class="secondary toggle-customer-archive" data-id="${c.id}" data-archived="${c.archived}">${c.archived ? 'เลิกเก็บถาวร' : 'เก็บถาวร'}</button></td>
+      <td data-requires="edit"><button class="secondary toggle-customer-archive" data-id="${c.id}" data-archived="${c.archived}">${c.archived ? 'เลิกเก็บถาวร' : 'เก็บถาวร'}</button></td>
     </tr>`).join('');
 
   container.innerHTML = `
     <h2>ลูกค้า</h2>
-    <div class="card">
+    <div class="card" data-requires="create">
       <h3>เพิ่มลูกค้าใหม่</h3>
       <form id="cu-form" class="stack">
         <div class="form-row">
@@ -1427,9 +1984,7 @@ async function renderCustomers(container) {
         </div>
         <div class="form-row">
           <label class="field">ผู้ติดต่อ <input type="text" id="cu-contact"></label>
-          <label class="field">พนักงานขายที่ดูแล
-            <select id="cu-assigned-new"><option value="">— ไม่ระบุ —</option>${staffUsers.map((u) => `<option value="${u.id}">${escapeHtml(u.display_name)}</option>`).join('')}</select>
-          </label>
+          <label class="field">พนักงานขายที่ดูแล <input type="text" id="cu-assigned-new" placeholder="ไม่บังคับ"></label>
         </div>
         <label class="field">ที่อยู่ <textarea id="cu-address" rows="2"></textarea></label>
         <label class="field">หมายเหตุ <textarea id="cu-note" rows="2"></textarea></label>
@@ -1457,7 +2012,7 @@ async function renderCustomers(container) {
         phone: document.getElementById('cu-phone').value || null,
         contactPerson: document.getElementById('cu-contact').value || null,
         address: document.getElementById('cu-address').value || null,
-        assignedUserId: document.getElementById('cu-assigned-new').value || null,
+        assignedTo: document.getElementById('cu-assigned-new').value || null,
         note: document.getElementById('cu-note').value || null,
       });
       msg.innerHTML = '<p class="msg success">เพิ่มลูกค้าเรียบร้อยแล้ว</p>';
@@ -1467,10 +2022,10 @@ async function renderCustomers(container) {
     }
   });
 
-  container.querySelectorAll('.cu-assigned').forEach((select) => {
-    select.addEventListener('change', async () => {
+  container.querySelectorAll('.cu-assigned').forEach((input) => {
+    input.addEventListener('change', async () => {
       try {
-        await api('PATCH', `/api/customers/${select.dataset.id}`, { assignedUserId: select.value || null });
+        await api('PATCH', `/api/customers/${input.dataset.id}`, { assignedTo: input.value || null });
       } catch (err) {
         alert(err.message);
       }
@@ -1484,6 +2039,8 @@ async function renderCustomers(container) {
       route();
     });
   });
+
+  applyPermissionGates(container);
 }
 
 // ---------- Users (admin) ----------
@@ -1493,30 +2050,56 @@ async function renderUsers(container) {
     return;
   }
   const users = await api('GET', '/api/users');
-  const rows = users.map((u) => `
+  const roleOptions = (selected) => `
+    <option value="admin" ${selected === 'admin' ? 'selected' : ''}>ผู้ดูแลระบบ</option>
+    <option value="editor" ${selected === 'editor' ? 'selected' : ''}>กรอก + แก้ไข</option>
+    <option value="creator" ${selected === 'creator' ? 'selected' : ''}>กรอกได้อย่างเดียว</option>
+    <option value="viewer" ${selected === 'viewer' ? 'selected' : ''}>ดูอย่างเดียว</option>`;
+  const rows = users.map((u) => {
+    const isSelf = u.id === state.user.id;
+    const pwRowId = `uf-pw-${u.id}`;
+    return `
     <tr>
       <td>${escapeHtml(u.username)}</td>
-      <td>${escapeHtml(u.display_name)}</td>
-      <td>${ROLE_LABEL[u.role] || escapeHtml(u.role)}</td>
+      <td><select class="uf-role-select" data-id="${u.id}" ${isSelf ? 'disabled title="แก้ไขบทบาทของตัวเองไม่ได้"' : ''}>${roleOptions(u.role)}</select></td>
       <td>${u.active ? '<span class="badge ok">ใช้งานอยู่</span>' : '<span class="badge low">ปิดใช้งาน</span>'}</td>
-      <td><button class="secondary toggle-active" data-id="${u.id}" data-active="${u.active}">${u.active ? 'ปิดใช้งาน' : 'เปิดใช้งาน'}</button></td>
-    </tr>`).join('');
+      <td style="white-space:nowrap">
+        <button class="secondary toggle-active" data-id="${u.id}" data-active="${u.active}" ${isSelf ? 'disabled title="ปิดใช้งานบัญชีตัวเองไม่ได้"' : ''}>${u.active ? 'ปิดใช้งาน' : 'เปิดใช้งาน'}</button>
+        <button type="button" class="secondary uf-reset-pw-btn" data-target="${pwRowId}">รีเซ็ตรหัสผ่าน</button>
+        <button type="button" class="secondary uf-delete-btn" data-id="${u.id}" data-username="${escapeHtml(u.username)}" ${isSelf ? 'disabled title="ลบบัญชีตัวเองไม่ได้"' : ''}>ลบ</button>
+      </td>
+    </tr>
+    <tr class="hidden" id="${pwRowId}">
+      <td colspan="4">
+        <div class="form-row" style="align-items:flex-end;max-width:420px">
+          <label class="field">ตั้งรหัสผ่านใหม่ให้ ${escapeHtml(u.username)} (อย่างน้อย 6 ตัวอักษร)
+            <input type="password" class="uf-new-pw" minlength="6">
+          </label>
+          <button type="button" class="primary uf-save-pw-btn" data-id="${u.id}">บันทึก</button>
+        </div>
+        <div class="uf-pw-msg"></div>
+      </td>
+    </tr>`;
+  }).join('');
 
   container.innerHTML = `
     <h2>บัญชีพนักงาน</h2>
+    <p class="muted">
+      <strong>สิทธิ์การใช้งาน:</strong> ผู้ดูแลระบบ — ทำได้ทุกอย่างรวมถึงจัดการบัญชีผู้ใช้ ·
+      กรอก + แก้ไข — เพิ่มและแก้ไขข้อมูลได้ทุกส่วน (ยกเว้นจัดการบัญชีผู้ใช้) ·
+      กรอกได้อย่างเดียว — เพิ่มข้อมูลใหม่ได้ แต่แก้ไขรายการเดิมไม่ได้ ·
+      ดูอย่างเดียว — ดูข้อมูลได้อย่างเดียว เพิ่ม/แก้ไขไม่ได้
+    </p>
     <div class="card">
       <h3>เพิ่มบัญชีพนักงาน</h3>
       <form id="uf-form" class="stack">
         <div class="form-row">
           <label class="field">ชื่อผู้ใช้ <input type="text" id="uf-username" required></label>
-          <label class="field">ชื่อที่แสดง <input type="text" id="uf-display" required></label>
-        </div>
-        <div class="form-row">
           <label class="field">รหัสผ่าน <input type="password" id="uf-password" minlength="6" required></label>
-          <label class="field">บทบาท
-            <select id="uf-role"><option value="staff">พนักงาน</option><option value="admin">ผู้ดูแลระบบ</option></select>
-          </label>
         </div>
+        <label class="field">บทบาท
+          <select id="uf-role">${roleOptions('creator')}</select>
+        </label>
         <button type="submit" class="primary">สร้างบัญชี</button>
         <div id="uf-msg"></div>
       </form>
@@ -1524,7 +2107,7 @@ async function renderUsers(container) {
     <div class="card">
       <div class="table-wrap">
         <table>
-          <thead><tr><th>ชื่อผู้ใช้</th><th>ชื่อที่แสดง</th><th>บทบาท</th><th>สถานะ</th><th></th></tr></thead>
+          <thead><tr><th>ชื่อผู้ใช้</th><th>บทบาท</th><th>สถานะ</th><th></th></tr></thead>
           <tbody>${rows}</tbody>
         </table>
       </div>
@@ -1538,7 +2121,6 @@ async function renderUsers(container) {
     try {
       await api('POST', '/api/users', {
         username: document.getElementById('uf-username').value.trim(),
-        displayName: document.getElementById('uf-display').value.trim(),
         password: document.getElementById('uf-password').value,
         role: document.getElementById('uf-role').value,
       });
@@ -1549,11 +2131,56 @@ async function renderUsers(container) {
     }
   });
 
+  container.querySelectorAll('.uf-role-select').forEach((select) => {
+    select.addEventListener('change', async () => {
+      try {
+        await api('PATCH', `/api/users/${select.dataset.id}/role`, { role: select.value });
+      } catch (err) {
+        alert(err.message);
+        route();
+      }
+    });
+  });
+
   container.querySelectorAll('.toggle-active').forEach((btn) => {
     btn.addEventListener('click', async () => {
       const active = btn.dataset.active === '1';
       await api('PUT', `/api/users/${btn.dataset.id}/active`, { active: !active });
       route();
+    });
+  });
+
+  container.querySelectorAll('.uf-reset-pw-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      document.getElementById(btn.dataset.target).classList.toggle('hidden');
+    });
+  });
+
+  container.querySelectorAll('.uf-save-pw-btn').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const row = btn.closest('tr');
+      const input = row.querySelector('.uf-new-pw');
+      const msg = row.querySelector('.uf-pw-msg');
+      msg.innerHTML = '';
+      try {
+        await api('PATCH', `/api/users/${btn.dataset.id}/password`, { newPassword: input.value });
+        msg.innerHTML = '<p class="msg success">ตั้งรหัสผ่านใหม่เรียบร้อยแล้ว</p>';
+        input.value = '';
+      } catch (err) {
+        msg.innerHTML = `<p class="msg error">${escapeHtml(err.message)}</p>`;
+      }
+    });
+  });
+
+  container.querySelectorAll('.uf-delete-btn').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      if (!confirm(`ลบบัญชี "${btn.dataset.username}" ใช่หรือไม่? การลบไม่สามารถย้อนกลับได้`)) return;
+      try {
+        await api('DELETE', `/api/users/${btn.dataset.id}`);
+        route();
+      } catch (err) {
+        alert(err.message);
+      }
     });
   });
 }

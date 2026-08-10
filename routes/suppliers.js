@@ -1,6 +1,6 @@
 const express = require('express');
 const db = require('../db');
-const { requireAuth } = require('../middleware/auth');
+const { requireAuth, requireCreate } = require('../middleware/auth');
 
 const router = express.Router();
 
@@ -9,7 +9,7 @@ router.get('/', requireAuth, (req, res) => {
   res.json(rows);
 });
 
-router.post('/', requireAuth, (req, res) => {
+router.post('/', requireAuth, requireCreate, (req, res) => {
   const name = (req.body || {}).name?.trim();
   if (!name) return res.status(400).json({ error: 'กรุณาระบุชื่อซัพพลายเออร์' });
 

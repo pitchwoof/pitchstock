@@ -1,6 +1,6 @@
 const express = require('express');
 const db = require('../db');
-const { requireAuth } = require('../middleware/auth');
+const { requireAuth, requireCreate, requireEdit } = require('../middleware/auth');
 
 const router = express.Router();
 
@@ -40,7 +40,7 @@ router.get('/:id', requireAuth, (req, res) => {
   res.json(claim);
 });
 
-router.post('/', requireAuth, (req, res) => {
+router.post('/', requireAuth, requireCreate, (req, res) => {
   const {
     type, productId, batchId, quantity, claimDate, counterparty,
     category, details,
@@ -69,7 +69,7 @@ router.post('/', requireAuth, (req, res) => {
   res.status(201).json({ id: Number(info.lastInsertRowid) });
 });
 
-router.patch('/:id', requireAuth, (req, res) => {
+router.patch('/:id', requireAuth, requireEdit, (req, res) => {
   const { status, resolutionNote, redirectedTo, redirectedQuantity } = req.body || {};
   const claim = db.prepare('SELECT * FROM claims WHERE id = ?').get(req.params.id);
   if (!claim) return res.status(404).json({ error: 'ไม่พบรายการเคลม' });

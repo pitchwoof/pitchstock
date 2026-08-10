@@ -97,6 +97,21 @@ CREATE TABLE IF NOT EXISTS customers (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS purchase_orders (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  product_id INTEGER NOT NULL REFERENCES products(id),
+  supplier TEXT,
+  quantity REAL NOT NULL,
+  order_date TEXT NOT NULL,
+  expected_date TEXT,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'received', 'cancelled')),
+  note TEXT,
+  batch_id INTEGER REFERENCES batches(id),
+  created_by INTEGER REFERENCES users(id),
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE INDEX IF NOT EXISTS idx_batches_product ON batches(product_id);
 CREATE INDEX IF NOT EXISTS idx_batches_expiration ON batches(expiration_date);
 CREATE INDEX IF NOT EXISTS idx_txn_product ON stock_transactions(product_id);
@@ -104,6 +119,8 @@ CREATE INDEX IF NOT EXISTS idx_txn_batch ON stock_transactions(batch_id);
 CREATE INDEX IF NOT EXISTS idx_claims_product ON claims(product_id);
 CREATE INDEX IF NOT EXISTS idx_claims_status ON claims(status);
 CREATE INDEX IF NOT EXISTS idx_customers_assigned ON customers(assigned_user_id);
+CREATE INDEX IF NOT EXISTS idx_po_product ON purchase_orders(product_id);
+CREATE INDEX IF NOT EXISTS idx_po_status ON purchase_orders(status);
 `);
 
 // Lightweight migrations: add columns that may not exist on a database created before this feature.
@@ -113,6 +130,18 @@ if (!productColumns.includes('lead_time_days')) {
 }
 if (!productColumns.includes('supplier_id')) {
   db.exec('ALTER TABLE products ADD COLUMN supplier_id INTEGER REFERENCES suppliers(id)');
+}
+
+// 'staff' used to mean full create+edit access to everything except user management — now that
+// access is split into finer tiers (viewer/creator/editor), map old accounts to 'editor' so
+// nobody's access silently narrows on upgrade.
+db.exec("UPDATE users SET role = 'editor' WHERE role = 'staff'");
+
+// "พนักงานขายที่ดูแล" (assigned salesperson) is just a freeform label on the customer record,
+// not a link to a real staff login — so it survives independently of the users table.
+const customerColumns = db.prepare("PRAGMA table_info(customers)").all().map((c) => c.name);
+if (!customerColumns.includes('assigned_to')) {
+  db.exec('ALTER TABLE customers ADD COLUMN assigned_to TEXT');
 }
 
 const claimColumns = db.prepare("PRAGMA table_info(claims)").all().map((c) => c.name);
@@ -126,6 +155,12 @@ if (!claimColumns.includes('redirected_quantity')) {
 const txnColumns = db.prepare("PRAGMA table_info(stock_transactions)").all().map((c) => c.name);
 if (!txnColumns.includes('purpose')) {
   db.exec("ALTER TABLE stock_transactions ADD COLUMN purpose TEXT NOT NULL DEFAULT 'sale'");
+}
+if (!txnColumns.includes('unit_price')) {
+  db.exec('ALTER TABLE stock_transactions ADD COLUMN unit_price REAL');
+}
+if (!txnColumns.includes('requisition_no')) {
+  db.exec('ALTER TABLE stock_transactions ADD COLUMN requisition_no TEXT');
 }
 
 module.exports = db;

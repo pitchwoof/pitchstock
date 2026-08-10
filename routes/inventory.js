@@ -27,6 +27,7 @@ function expiryStatus(dateStr) {
 
 // Full inventory: every active product with its batches (remaining > 0) sorted FEFO
 router.get('/', requireAuth, (req, res) => {
+  const isAdmin = req.session.role === 'admin';
   const products = db.prepare('SELECT * FROM products WHERE archived = 0 ORDER BY brand, name').all();
   const batchStmt = db.prepare(`
     SELECT * FROM batches
@@ -43,7 +44,7 @@ router.get('/', requireAuth, (req, res) => {
       quantityReceived: b.quantity_received,
       supplier: b.supplier,
       receivedDate: b.received_date,
-      unitCost: b.unit_cost,
+      ...(isAdmin ? { unitCost: b.unit_cost } : {}),
       note: b.note,
       daysUntilExpiry: daysUntil(b.expiration_date),
       status: expiryStatus(b.expiration_date),
@@ -114,6 +115,9 @@ router.get('/dashboard', requireAuth, (req, res) => {
     ORDER BY t.created_at DESC
     LIMIT 10
   `).all();
+  if (req.session.role !== 'admin') {
+    for (const r of recentTransactions) delete r.unit_price;
+  }
 
   res.json({
     totalSkus: products.length,
