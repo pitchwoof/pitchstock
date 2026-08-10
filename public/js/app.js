@@ -674,7 +674,10 @@ async function renderInventory(container) {
     .join('');
 
   container.innerHTML = `
-    <h2>คลังสินค้า</h2>
+    <div class="chart-header">
+      <h2>คลังสินค้า</h2>
+      <button type="button" id="inv-export-pdf" class="secondary no-print">ส่งออก PDF</button>
+    </div>
     ${sections || '<div class="card"><p class="muted">ยังไม่มีสินค้า</p></div>'}
   `;
 
@@ -684,6 +687,12 @@ async function renderInventory(container) {
       const expanding = row.classList.toggle('expanded');
       container.querySelectorAll(`[data-parent="${id}"]`).forEach((r) => r.classList.toggle('hidden', !expanding));
     });
+  });
+
+  document.getElementById('inv-export-pdf').addEventListener('click', () => {
+    container.querySelectorAll('.inv-toggle-row').forEach((row) => row.classList.add('expanded'));
+    container.querySelectorAll('.batch-subtable').forEach((row) => row.classList.remove('hidden'));
+    window.print();
   });
 }
 

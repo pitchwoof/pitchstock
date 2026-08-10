@@ -436,4 +436,24 @@ tr.inv-toggle-row.expanded .inv-chevron { transform: rotate(90deg); }
   transition: background 0.15s ease, transform 0.1s ease;
 }
 .theme-toggle:hover { background: color-mix(in srgb, var(--primary) 12%, var(--panel-2)); }
+
+/* Print / "export as PDF" (via the browser's native print-to-PDF) */
+@media print {
+  .topbar, .no-print { display: none !important; }
+  body { background: #fff !important; }
+  .view { padding: 0; max-width: none; }
+  .card {
+    box-shadow: none;
+    border: 1px solid #ccc;
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+  .badge {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  table { break-inside: auto; }
+  tr { break-inside: avoid; }
+  .inv-chevron { display: none; }
+}
 .theme-toggle:active { transform: scale(0.92); }
