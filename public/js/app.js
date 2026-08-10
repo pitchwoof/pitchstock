@@ -676,7 +676,7 @@ async function renderInventory(container) {
   container.innerHTML = `
     <div class="chart-header">
       <h2>คลังสินค้า</h2>
-      <button type="button" id="inv-export-pdf" class="secondary no-print">ส่งออก PDF</button>
+      <button type="button" id="inv-export-csv" class="secondary no-print">ส่งออก CSV</button>
     </div>
     ${sections || '<div class="card"><p class="muted">ยังไม่มีสินค้า</p></div>'}
   `;
@@ -689,10 +689,8 @@ async function renderInventory(container) {
     });
   });
 
-  document.getElementById('inv-export-pdf').addEventListener('click', () => {
-    container.querySelectorAll('.inv-toggle-row').forEach((row) => row.classList.add('expanded'));
-    container.querySelectorAll('.batch-subtable').forEach((row) => row.classList.remove('hidden'));
-    window.print();
+  document.getElementById('inv-export-csv').addEventListener('click', () => {
+    window.open('/api/inventory/export.csv', '_blank');
   });
 }
 

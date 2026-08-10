@@ -76,6 +76,53 @@ router.get('/', requireAuth, (req, res) => {
   res.json(result);
 });
 
+const EXPIRY_STATUS_LABEL_TH = {
+  expired: 'หมดอายุ', critical: 'ใกล้หมดอายุมาก', warning: 'เฝ้าระวัง', ok: 'ปกติ', none: 'ไม่ระบุ',
+};
+
+// Full inventory as CSV — one row per lot, plus one row for products with no stock at all.
+router.get('/export.csv', requireAuth, (req, res) => {
+  const isAdmin = req.session.role === 'admin';
+  const products = db.prepare('SELECT * FROM products WHERE archived = 0 ORDER BY brand, name').all();
+  const batchStmt = db.prepare(`
+    SELECT * FROM batches
+    WHERE product_id = ? AND quantity_remaining > 0
+    ORDER BY (expiration_date IS NULL) ASC, expiration_date ASC, received_date ASC
+  `);
+
+  const csvEscape = (v) => {
+    if (v === null || v === undefined) return '';
+    const s = String(v);
+    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+
+  const header = ['ซัพพลายเออร์', 'รหัส SKU', 'ชื่อสินค้า', 'ล็อต', 'วันหมดอายุ', 'คงเหลือ', 'หน่วย', 'จุดสั่งซื้อ', 'สถานะ'];
+  if (isAdmin) header.push('ต้นทุน/หน่วย');
+  const lines = [header.join(',')];
+
+  for (const p of products) {
+    const batches = batchStmt.all(p.id);
+    const rows = batches.length ? batches : [null];
+    for (const b of rows) {
+      const row = [
+        p.brand, p.sku_code, p.name,
+        b ? (b.batch_number || `ล็อต ${b.id}`) : 'ไม่มีล็อต',
+        b ? b.expiration_date : '',
+        b ? b.quantity_remaining : 0,
+        p.unit,
+        p.reorder_level,
+        EXPIRY_STATUS_LABEL_TH[b ? expiryStatus(b.expiration_date) : 'none'],
+      ];
+      if (isAdmin) row.push(b && b.unit_cost != null ? b.unit_cost : '');
+      lines.push(row.map(csvEscape).join(','));
+    }
+  }
+
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', 'attachment; filename="inventory.csv"');
+  res.send(`﻿${lines.join('\n')}`);
+});
+
 // Dashboard summary
 router.get('/dashboard', requireAuth, (req, res) => {
   const products = db.prepare('SELECT * FROM products WHERE archived = 0').all();
