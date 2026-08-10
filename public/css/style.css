@@ -148,6 +148,30 @@ body {
 
 .view { padding: 24px; max-width: 1200px; width: 100%; margin: 0 auto; }
 
+/* Segmented tab toggle — alternative to a bare radio-button row for switching between a
+   small, fixed set of modes on the same page (e.g. issue-stock: normal vs. convert). */
+.tab-toggle {
+  display: inline-flex;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 4px;
+  gap: 4px;
+}
+.tab-toggle-btn {
+  padding: 9px 18px;
+  border: none;
+  background: transparent;
+  border-radius: calc(var(--radius-sm) - 2px);
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--muted);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.tab-toggle-btn:hover { color: var(--text); }
+.tab-toggle-btn.active { background: var(--primary); color: white; box-shadow: var(--shadow-sm); }
+
 h2 { margin: 0 0 18px; font-size: 22px; font-weight: 700; letter-spacing: -0.01em; }
 h3 { margin: 0 0 10px; font-size: 15px; font-weight: 700; }
 

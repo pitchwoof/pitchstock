@@ -838,9 +838,9 @@ async function renderIssue(container) {
     <h2>เบิกสินค้าออก (ขายให้ลูกค้า)</h2>
     <div class="card">
       <label class="field">รูปแบบการเบิกออก</label>
-      <div class="form-row">
-        <label><input type="radio" name="if-mode" id="if-mode-normal" value="normal" checked> เบิกออกปกติ</label>
-        <label><input type="radio" name="if-mode" id="if-mode-convert" value="convert"> เบิกออกแบบแปลงหมึกเป็นเบอร์อื่น</label>
+      <div class="tab-toggle" id="if-mode-toggle">
+        <button type="button" class="tab-toggle-btn active" data-mode="normal">เบิกออกปกติ</button>
+        <button type="button" class="tab-toggle-btn" data-mode="convert">เบิกออกแบบแปลงหมึกเป็นเบอร์อื่น</button>
       </div>
     </div>
     <div id="issue-mode-normal">
@@ -903,9 +903,10 @@ async function renderIssue(container) {
     </div>
   `;
 
-  document.querySelectorAll('input[name="if-mode"]').forEach((radio) => {
-    radio.addEventListener('change', () => {
-      const mode = document.querySelector('input[name="if-mode"]:checked').value;
+  document.querySelectorAll('#if-mode-toggle .tab-toggle-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const mode = btn.dataset.mode;
+      document.querySelectorAll('#if-mode-toggle .tab-toggle-btn').forEach((b) => b.classList.toggle('active', b === btn));
       document.getElementById('issue-mode-normal').classList.toggle('hidden', mode !== 'normal');
       document.getElementById('issue-mode-convert').classList.toggle('hidden', mode !== 'convert');
     });
