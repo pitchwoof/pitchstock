@@ -1656,6 +1656,7 @@ function buildClaimsTableHTML(claims) {
 
 async function renderClaims(container) {
   await loadProducts();
+  await loadCustomers();
   container.innerHTML = `
     <h2>เคลม/ตีกลับจากลูกค้า</h2>
     <p class="muted">
@@ -1687,9 +1688,24 @@ async function renderClaims(container) {
             <input type="date" id="cf-date" value="${new Date().toISOString().slice(0, 10)}">
           </label>
         </div>
-        <label class="field">ชื่อลูกค้า
-          <input type="text" id="cf-counterparty">
+        <label class="field">ลูกค้า
+          <div class="searchable-select">
+            <input type="text" class="ss-input" id="cf-customer-search" placeholder="พิมพ์เพื่อค้นหาลูกค้า..." autocomplete="off">
+            <div class="ss-list hidden" id="cf-customer-list"></div>
+            <select id="cf-customer" class="hidden">
+              <option value="">— ไม่ระบุ —</option>
+              ${customerOptions(state.customers)}
+              <option value="__new__">+ เพิ่มลูกค้าใหม่…</option>
+            </select>
+          </div>
         </label>
+        <div class="form-row hidden" id="cf-new-customer-row">
+          <label class="field">ชื่อลูกค้าใหม่
+            <input type="text" id="cf-new-customer-name">
+          </label>
+          <button type="button" id="cf-add-customer-btn" class="secondary" style="align-self:flex-end">เพิ่มลูกค้า</button>
+        </div>
+        <div id="cf-customer-msg"></div>
         <label class="field">สาเหตุ
           <select id="cf-category">${claimCategoryOptions()}</select>
         </label>
@@ -1728,10 +1744,41 @@ async function renderClaims(container) {
   );
   if (state.products.length) document.getElementById('cf-product').dispatchEvent(new Event('change'));
 
+  wireSearchableSelect('cf-customer', { newNameInputId: 'cf-new-customer-name' });
+  document.getElementById('cf-customer').addEventListener('change', (e) => {
+    document.getElementById('cf-new-customer-row').classList.toggle('hidden', e.target.value !== '__new__');
+    if (e.target.value === '__new__') document.getElementById('cf-new-customer-name').focus();
+  });
+
+  document.getElementById('cf-add-customer-btn').addEventListener('click', async () => {
+    const nameInput = document.getElementById('cf-new-customer-name');
+    const customerMsg = document.getElementById('cf-customer-msg');
+    const name = nameInput.value.trim();
+    customerMsg.innerHTML = '';
+    if (!name) return;
+    try {
+      await api('POST', '/api/customers', { name });
+      await loadCustomers();
+      const select = document.getElementById('cf-customer');
+      select.innerHTML = `<option value="">— ไม่ระบุ —</option>${customerOptions(state.customers)}<option value="__new__">+ เพิ่มลูกค้าใหม่…</option>`;
+      select.value = name;
+      select._syncSearchable();
+      document.getElementById('cf-new-customer-row').classList.add('hidden');
+      nameInput.value = '';
+    } catch (err) {
+      customerMsg.innerHTML = `<p class="msg error">${escapeHtml(err.message)}</p>`;
+    }
+  });
+
   document.getElementById('cf-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     const msg = document.getElementById('cf-msg');
     msg.innerHTML = '';
+    const customerValue = document.getElementById('cf-customer').value;
+    if (customerValue === '__new__') {
+      msg.innerHTML = '<p class="msg error">กรุณากด "เพิ่มลูกค้า" ก่อน หรือเลือกลูกค้าที่มีอยู่แล้ว</p>';
+      return;
+    }
     try {
       await api('POST', '/api/claims', {
         type: 'customer_reject',
@@ -1739,13 +1786,14 @@ async function renderClaims(container) {
         batchId: document.getElementById('cf-batch').value || null,
         quantity: Number(document.getElementById('cf-qty').value),
         claimDate: document.getElementById('cf-date').value || null,
-        counterparty: document.getElementById('cf-counterparty').value || null,
+        counterparty: customerValue || null,
         category: document.getElementById('cf-category').value,
         details: document.getElementById('cf-details').value || null,
       });
       msg.innerHTML = '<p class="msg success">บันทึกรายการเรียบร้อยแล้ว</p>';
       e.target.reset();
       document.getElementById('cf-date').value = new Date().toISOString().slice(0, 10);
+      document.getElementById('cf-new-customer-row').classList.add('hidden');
       await loadClaims();
     } catch (err) {
       msg.innerHTML = `<p class="msg error">${escapeHtml(err.message)}</p>`;
