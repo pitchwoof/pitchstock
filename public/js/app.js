@@ -1603,8 +1603,6 @@ async function renderHistory(container) {
 
 // ---------- Claims / returns ----------
 const CLAIM_TYPE_LABEL = { customer_reject: 'ลูกค้าตีกลับ', supplier_claim: 'เคลมซัพพลายเออร์' };
-const CLAIM_STATUS_LABEL = { pending: 'รอดำเนินการ', in_progress: 'กำลังดำเนินการ', approved: 'อนุมัติแล้ว', rejected: 'ถูกปฏิเสธ', resolved: 'เสร็จสิ้น' };
-const CLAIM_STATUS_BADGE = { pending: 'none', in_progress: 'critical', approved: 'ok', rejected: 'expired', resolved: 'ok' };
 const CLAIM_CATEGORY_LABEL = {
   defective: 'สินค้าชำรุด/เสีย',
   expired: 'สินค้าหมดอายุ',
@@ -1617,11 +1615,11 @@ const CLAIM_CATEGORY_LABEL = {
 function claimCategoryOptions() {
   return Object.entries(CLAIM_CATEGORY_LABEL).map(([v, l]) => `<option value="${v}">${l}</option>`).join('');
 }
-function claimStatusOptions(selected) {
-  return Object.entries(CLAIM_STATUS_LABEL).map(([v, l]) => `<option value="${v}" ${v === selected ? 'selected' : ''}>${l}</option>`).join('');
-}
 
-function buildClaimsTableHTML(claims) {
+// Claims only have two effective states: "ดำเนินการ" (open, the only manual state) and "เสร็จสิ้น"
+// (closed — reached only via "รับคืนเข้าคลัง" or "ปฏิเสธทั้งหมด"), so open/closed claims render as
+// two separate tables rather than exposing a status picker.
+function buildClaimsTableHTML(claims, { showActions }) {
   const rows = claims.map((c) => `
     <tr>
       <td>${fmtDate(c.claim_date)}</td>
@@ -1630,15 +1628,17 @@ function buildClaimsTableHTML(claims) {
       <td class="right">${fmtNum(c.quantity)} ${escapeHtml(c.unit)}</td>
       <td>${escapeHtml(c.counterparty || '—')}</td>
       <td class="muted">${CLAIM_CATEGORY_LABEL[c.category] || c.category}<br>${escapeHtml(c.details || '')}</td>
-      <td data-requires="edit"><select class="cl-status" data-id="${c.id}">${claimStatusOptions(c.status)}</select></td>
-      <td data-requires="edit"><input type="text" class="cl-resolution" data-id="${c.id}" value="${escapeHtml(c.resolution_note || '')}" placeholder="บันทึกผลการดำเนินการ"></td>
-      <td data-requires="edit">
-        <input type="text" class="cl-redirect-to" data-id="${c.id}" value="${escapeHtml(c.redirected_to || '')}" placeholder="ชื่อลูกค้าที่ได้รับแทน" style="margin-bottom:4px">
-        <input type="number" class="cl-redirect-qty" data-id="${c.id}" value="${c.redirected_quantity ?? ''}" placeholder="จำนวนที่ส่งต่อ" step="any" min="0">
-      </td>
       <td class="muted">${escapeHtml(c.user_name || '')}</td>
-      <td data-requires="create"><a href="#/receive?claimId=${c.id}" class="secondary" style="display:inline-block;text-decoration:none;padding:6px 10px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:12.5px;white-space:nowrap">รับคืนเข้าคลัง</a></td>
+      <td data-requires="edit"><input type="text" class="cl-resolution" data-id="${c.id}" value="${escapeHtml(c.resolution_note || '')}" placeholder="บันทึกผลการดำเนินการ"></td>
+      ${showActions ? `
+      <td data-requires="create" style="white-space:nowrap">
+        <a href="#/receive?claimId=${c.id}" class="secondary" style="display:inline-block;text-decoration:none;padding:6px 10px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:12.5px;white-space:nowrap;margin-bottom:4px">รับคืนเข้าคลัง</a>
+        <button type="button" class="secondary cl-reject" data-id="${c.id}" data-qty="${c.quantity}" data-unit="${escapeHtml(c.unit)}" style="display:block;width:100%;font-size:12.5px;padding:6px 10px">ปฏิเสธทั้งหมด</button>
+      </td>` : ''}
     </tr>`).join('');
+
+  const colCount = showActions ? 9 : 8;
+  const emptyText = showActions ? 'ไม่มีรายการที่กำลังดำเนินการ' : 'ยังไม่มีรายการที่เสร็จสิ้น';
 
   return `
     <div class="table-wrap">
@@ -1646,10 +1646,10 @@ function buildClaimsTableHTML(claims) {
         <thead>
           <tr>
             <th>วันที่</th><th>สินค้า</th><th>ล็อต</th><th class="right">จำนวน</th>
-            <th>ลูกค้า</th><th>สาเหตุ</th><th>สถานะ</th><th>ผลการดำเนินการ</th><th>ส่งต่อให้ลูกค้าอื่น</th><th>บันทึกโดย</th><th></th>
+            <th>ลูกค้า</th><th>สาเหตุ</th><th>บันทึกโดย</th><th>ผลการดำเนินการ</th>${showActions ? '<th></th>' : ''}
           </tr>
         </thead>
-        <tbody>${rows || '<tr><td colspan="11" class="muted">ยังไม่มีรายการเคลม/ตีกลับ</td></tr>'}</tbody>
+        <tbody>${rows || `<tr><td colspan="${colCount}" class="muted">${emptyText}</td></tr>`}</tbody>
       </table>
     </div>`;
 }
@@ -1661,10 +1661,9 @@ async function renderClaims(container) {
     <h2>เคลม/ตีกลับจากลูกค้า</h2>
     <p class="muted">
       <strong>ข้อควรทราบ:</strong> การบันทึกเคลม/ตีกลับ ไม่ได้ปรับจำนวนสต็อกอัตโนมัติ —
-      เป็นการบันทึกติดตามเรื่องแยกต่างหาก ถ้าท้ายที่สุดได้สินค้าคืนเข้าคลังจริง
-      ให้กดปุ่ม "รับคืนเข้าคลัง" ของรายการนั้นเพื่อไปหน้ารับสินค้าเข้าพร้อมข้อมูลกรอกให้อัตโนมัติ
-      หากนำตลับที่ถูกตีกลับจากลูกค้าเจ้าหนึ่งไปส่งให้ลูกค้าอีกเจ้าแทน (โดยไม่ผ่านคลัง)
-      ให้บันทึกชื่อลูกค้าและจำนวนที่ช่อง "ส่งต่อให้ลูกค้าอื่น" ในตารางด้านล่างของรายการนั้น
+      เป็นการบันทึกติดตามเรื่องแยกต่างหาก เมื่อดำเนินการเสร็จแล้ว ให้กดปุ่ม "รับคืนเข้าคลัง"
+      หากมีสินค้าที่รับกลับเข้าคลังได้ (ระบบจะบันทึกผลการดำเนินการให้อัตโนมัติ)
+      หรือกด "ปฏิเสธทั้งหมด" หากไม่มีสินค้าคืนเข้าคลังเลย — รายการจะย้ายไปตารางที่เสร็จสิ้นแล้วด้านล่าง
     </p>
     <div class="card" data-requires="create">
       <h3>บันทึกรายการใหม่</h3>
@@ -1717,16 +1716,12 @@ async function renderClaims(container) {
       </form>
     </div>
     <div class="card">
-      <div class="filters">
-        <label class="field">สถานะ
-          <select id="clf-status">
-            <option value="">ทั้งหมด</option>
-            ${Object.entries(CLAIM_STATUS_LABEL).map(([v, l]) => `<option value="${v}">${l}</option>`).join('')}
-          </select>
-        </label>
-        <button id="clf-apply" class="secondary">กรอง</button>
-      </div>
+      <h3>รายการที่กำลังดำเนินการ</h3>
       <div class="table-wrap" id="cl-table"><p class="muted">กำลังโหลด…</p></div>
+    </div>
+    <div class="card">
+      <h3>รายการที่เสร็จสิ้นแล้ว</h3>
+      <div class="table-wrap" id="cl-table-done"><p class="muted">กำลังโหลด…</p></div>
     </div>
   `;
 
@@ -1800,23 +1795,8 @@ async function renderClaims(container) {
     }
   });
 
-  async function loadClaims() {
-    const params = new URLSearchParams();
-    const status = document.getElementById('clf-status').value;
-    if (status) params.set('status', status);
-    const claims = await api('GET', `/api/claims?${params.toString()}`);
-    document.getElementById('cl-table').innerHTML = buildClaimsTableHTML(claims);
-
-    document.querySelectorAll('.cl-status').forEach((sel) => {
-      sel.addEventListener('change', async () => {
-        try {
-          await api('PATCH', `/api/claims/${sel.dataset.id}`, { status: sel.value });
-        } catch (err) {
-          alert(err.message);
-        }
-      });
-    });
-    document.querySelectorAll('.cl-resolution').forEach((input) => {
+  function wireResolutionInputs(root) {
+    root.querySelectorAll('.cl-resolution').forEach((input) => {
       input.addEventListener('change', async () => {
         try {
           await api('PATCH', `/api/claims/${input.dataset.id}`, { resolutionNote: input.value });
@@ -1825,28 +1805,38 @@ async function renderClaims(container) {
         }
       });
     });
-    document.querySelectorAll('.cl-redirect-to').forEach((input) => {
-      input.addEventListener('change', async () => {
+  }
+
+  async function loadClaims() {
+    const claims = await api('GET', '/api/claims');
+    const active = claims.filter((c) => c.status !== 'resolved');
+    const done = claims.filter((c) => c.status === 'resolved');
+    const activeTable = document.getElementById('cl-table');
+    const doneTable = document.getElementById('cl-table-done');
+    activeTable.innerHTML = buildClaimsTableHTML(active, { showActions: true });
+    doneTable.innerHTML = buildClaimsTableHTML(done, { showActions: false });
+
+    wireResolutionInputs(activeTable);
+    wireResolutionInputs(doneTable);
+
+    activeTable.querySelectorAll('.cl-reject').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        if (!confirm('ยืนยันว่าปฏิเสธเคลมนี้ทั้งหมด (ไม่มีสินค้าคืนเข้าคลัง)?')) return;
         try {
-          await api('PATCH', `/api/claims/${input.dataset.id}`, { redirectedTo: input.value });
+          await api('PATCH', `/api/claims/${btn.dataset.id}`, {
+            status: 'resolved',
+            resolutionNote: `ปฏิเสธทั้งหมด ${fmtNum(Number(btn.dataset.qty))} ${btn.dataset.unit}`,
+          });
+          await loadClaims();
         } catch (err) {
           alert(err.message);
         }
       });
     });
-    document.querySelectorAll('.cl-redirect-qty').forEach((input) => {
-      input.addEventListener('change', async () => {
-        try {
-          await api('PATCH', `/api/claims/${input.dataset.id}`, { redirectedQuantity: input.value ? Number(input.value) : null });
-        } catch (err) {
-          alert(err.message);
-        }
-      });
-    });
+
     applyPermissionGates(container);
   }
 
-  document.getElementById('clf-apply').addEventListener('click', loadClaims);
   await loadClaims();
   enhanceDateInputs(container);
 }
