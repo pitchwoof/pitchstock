@@ -875,7 +875,7 @@ async function renderReceive(container) {
           <input type="date" id="rf-date" value="${new Date().toISOString().slice(0, 10)}">
         </label>
       </div>
-      ${claim ? '<p class="muted" style="margin-top:-8px">ปรับจำนวนลงได้หากบางส่วนรับเข้าคลังไม่ได้ (เช่น น้ำหนักหมึกต่ำ หรือหมดอายุแล้ว) — ระบบจะบันทึกส่วนต่างไว้ในผลการดำเนินการของรายการเคลม</p>' : ''}
+      ${claim ? '<p class="muted" style="margin-top:-8px">ปรับจำนวนลงได้หากบางส่วนรับเข้าคลังไม่ได้ (เช่น น้ำหนักหมึกต่ำ หรือหมดอายุแล้ว) — ระบุเหตุผลในช่องหมายเหตุด้านล่างด้วย จะถูกบันทึกไว้ในรายการเคลมนี้</p>' : ''}
       <label class="field">หมายเหตุ
         <textarea id="rf-note" rows="2"></textarea>
       </label>
@@ -936,14 +936,9 @@ async function renderReceive(container) {
         note: document.getElementById('rf-note').value || null,
       });
       if (claim) {
-        const receivedQty = Number(document.getElementById('rf-qty').value);
-        const shortfall = claim.quantity - receivedQty;
-        const resolutionNote = shortfall > 0.0001
-          ? `รับคืนเข้าคลัง ${fmtNum(receivedQty)} จาก ${fmtNum(claim.quantity)} ${claim.unit} (ล็อตใหม่ #${result.batchId}) — อีก ${fmtNum(shortfall)} ${claim.unit} รับเข้าคลังไม่ได้`
-          : `รับคืนเข้าคลังแล้ว (ล็อตใหม่ #${result.batchId})`;
         await api('PATCH', `/api/claims/${claim.id}`, {
           status: 'resolved',
-          resolutionNote,
+          resolutionNote: document.getElementById('rf-note').value || null,
         });
         msg.innerHTML = '<p class="msg success">รับสินค้าเข้าคลังเรียบร้อยแล้ว และอัปเดตสถานะเคลมเป็น "เสร็จสิ้น" แล้ว — <a href="#/claims">กลับไปหน้าเคลม/ตีกลับ</a></p>';
       } else if (po) {
@@ -1629,7 +1624,7 @@ function buildClaimsTableHTML(claims, { showActions }) {
       <td>${escapeHtml(c.counterparty || '—')}</td>
       <td class="muted">${CLAIM_CATEGORY_LABEL[c.category] || c.category}<br>${escapeHtml(c.details || '')}</td>
       <td class="muted">${escapeHtml(c.user_name || '')}</td>
-      <td data-requires="edit"><input type="text" class="cl-resolution" data-id="${c.id}" value="${escapeHtml(c.resolution_note || '')}" placeholder="บันทึกผลการดำเนินการ"></td>
+      <td data-requires="edit"><input type="text" class="cl-resolution" data-id="${c.id}" value="${escapeHtml(c.resolution_note || '')}" placeholder="เหตุผล เช่น น้ำหนักหมึกต่ำ/หมดอายุ"></td>
       ${showActions ? `
       <td data-requires="create" style="white-space:nowrap">
         <a href="#/receive?claimId=${c.id}" class="secondary" style="display:inline-block;text-decoration:none;padding:6px 10px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:12.5px;white-space:nowrap;margin-bottom:4px">รับคืนเข้าคลัง</a>
@@ -1646,7 +1641,7 @@ function buildClaimsTableHTML(claims, { showActions }) {
         <thead>
           <tr>
             <th>วันที่</th><th>สินค้า</th><th>ล็อต</th><th class="right">จำนวน</th>
-            <th>ลูกค้า</th><th>สาเหตุ</th><th>บันทึกโดย</th><th>ผลการดำเนินการ</th>${showActions ? '<th></th>' : ''}
+            <th>ลูกค้า</th><th>สาเหตุ</th><th>บันทึกโดย</th><th>หมายเหตุ</th>${showActions ? '<th></th>' : ''}
           </tr>
         </thead>
         <tbody>${rows || `<tr><td colspan="${colCount}" class="muted">${emptyText}</td></tr>`}</tbody>
@@ -1662,7 +1657,7 @@ async function renderClaims(container) {
     <p class="muted">
       <strong>ข้อควรทราบ:</strong> การบันทึกเคลม/ตีกลับ ไม่ได้ปรับจำนวนสต็อกอัตโนมัติ —
       เป็นการบันทึกติดตามเรื่องแยกต่างหาก เมื่อดำเนินการเสร็จแล้ว ให้กดปุ่ม "รับคืนเข้าคลัง"
-      หากมีสินค้าที่รับกลับเข้าคลังได้ (ระบบจะบันทึกผลการดำเนินการให้อัตโนมัติ)
+      หากมีสินค้าที่รับกลับเข้าคลังได้ (ระบุเหตุผลในช่องหมายเหตุของฟอร์มรับสินค้าเข้า หากรับคืนไม่ครบ)
       หรือกด "ปฏิเสธทั้งหมด" หากไม่มีสินค้าคืนเข้าคลังเลย — รายการจะย้ายไปตารางที่เสร็จสิ้นแล้วด้านล่าง
     </p>
     <div class="card" data-requires="create">
@@ -1821,11 +1816,12 @@ async function renderClaims(container) {
 
     activeTable.querySelectorAll('.cl-reject').forEach((btn) => {
       btn.addEventListener('click', async () => {
-        if (!confirm('ยืนยันว่าปฏิเสธเคลมนี้ทั้งหมด (ไม่มีสินค้าคืนเข้าคลัง)?')) return;
+        const reason = prompt('เหตุผลที่ปฏิเสธทั้งหมด (ไม่มีสินค้าคืนเข้าคลัง):', '');
+        if (reason === null) return;
         try {
           await api('PATCH', `/api/claims/${btn.dataset.id}`, {
             status: 'resolved',
-            resolutionNote: `ปฏิเสธทั้งหมด ${fmtNum(Number(btn.dataset.qty))} ${btn.dataset.unit}`,
+            resolutionNote: reason.trim() || 'ปฏิเสธทั้งหมด',
           });
           await loadClaims();
         } catch (err) {
