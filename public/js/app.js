@@ -19,6 +19,21 @@ document.getElementById('theme-toggle').addEventListener('click', () => {
   applyTheme(next);
 });
 
+// ---------- Year era preference (พ.ศ. / ค.ศ.) ----------
+const YEAR_ERA_KEY = 'pitchstock-year-era';
+function getYearEra() { return localStorage.getItem(YEAR_ERA_KEY) || 'be'; }
+function applyYearEra(era) {
+  const btn = document.getElementById('era-toggle');
+  if (btn) btn.textContent = era === 'be' ? 'พ.ศ.' : 'ค.ศ.';
+}
+applyYearEra(getYearEra());
+document.getElementById('era-toggle').addEventListener('click', () => {
+  const next = getYearEra() === 'be' ? 'ce' : 'be';
+  localStorage.setItem(YEAR_ERA_KEY, next);
+  applyYearEra(next);
+  route();
+});
+
 const ROLE_LABEL = {
   admin: 'ผู้ดูแลระบบ',
   editor: 'กรอก + แก้ไข',
@@ -147,7 +162,15 @@ function escapeHtml(s) {
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
   }[c]));
 }
-function fmtDate(d) { return d || '—'; }
+function fmtDate(d) {
+  if (!d) return '—';
+  const m = String(d).match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!m) return d;
+  const [, y, mo, day] = m;
+  const year = getYearEra() === 'be' ? Number(y) + 543 : Number(y);
+  const yy = String(year).slice(-2).padStart(2, '0');
+  return `${day}/${mo}/${yy}`;
+}
 function fmtNum(n) {
   const v = Number(n);
   return Number.isInteger(v) ? String(v) : v.toFixed(2);
@@ -155,7 +178,8 @@ function fmtNum(n) {
 function formatMonthLabel(yyyyMM) {
   const [y, m] = yyyyMM.split('-').map(Number);
   const months = ['ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.', 'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.'];
-  return `${months[m - 1]} ${y}`;
+  const year = getYearEra() === 'be' ? y + 543 : y;
+  return `${months[m - 1]} ${year}`;
 }
 function niceMax(value) {
   if (value <= 0) return 1;

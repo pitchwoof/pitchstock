@@ -136,9 +136,7 @@ router.post('/convert', requireAuth, requireCreate, (req, res) => {
   if (!sourceProductId || !destProductId || !qty || qty <= 0) {
     return res.status(400).json({ error: 'กรุณาระบุสินค้าต้นทาง ปลายทาง และจำนวนที่มากกว่า 0' });
   }
-  if (Number(sourceProductId) === Number(destProductId)) {
-    return res.status(400).json({ error: 'สินค้าต้นทางและปลายทางต้องไม่ใช่รายการเดียวกัน' });
-  }
+  const sameProduct = Number(sourceProductId) === Number(destProductId);
   const sourceProduct = db.prepare('SELECT * FROM products WHERE id = ?').get(sourceProductId);
   const destProduct = db.prepare('SELECT * FROM products WHERE id = ?').get(destProductId);
   if (!sourceProduct) return res.status(404).json({ error: 'ไม่พบสินค้าต้นทาง' });
@@ -194,8 +192,12 @@ router.post('/convert', requireAuth, requireCreate, (req, res) => {
   let newBatchId;
   db.exec('BEGIN');
   try {
-    const outCounterparty = customer ? `${customer} (แปลงเป็น ${destProduct.name})` : `แปลงเป็น ${destProduct.name}`;
-    const inCounterparty = customer ? `${customer} (แปลงจาก ${sourceProduct.name})` : `แปลงจาก ${sourceProduct.name}`;
+    const outCounterparty = sameProduct
+      ? (customer ? `${customer} (ย้ายล็อต/แก้ไขวันหมดอายุ)` : 'ย้ายล็อต/แก้ไขวันหมดอายุ')
+      : (customer ? `${customer} (แปลงเป็น ${destProduct.name})` : `แปลงเป็น ${destProduct.name}`);
+    const inCounterparty = sameProduct
+      ? (customer ? `${customer} (ย้ายล็อต/แก้ไขวันหมดอายุ)` : 'ย้ายล็อต/แก้ไขวันหมดอายุ')
+      : (customer ? `${customer} (แปลงจาก ${sourceProduct.name})` : `แปลงจาก ${sourceProduct.name}`);
     for (const { batch, take } of sourceAllocation) {
       updateBatch.run(batch.quantity_remaining - take, batch.id);
       insertOutTxn.run(batch.id, sourceProductId, take, cDate, outCounterparty, req.session.userId, note || null);
@@ -203,7 +205,9 @@ router.post('/convert', requireAuth, requireCreate, (req, res) => {
     const bInfo = insertBatch.run(
       destProductId, destBatchNumber || `CONV-${sourceProduct.sku_code}-${cDate}`, inheritedExpiration,
       qty, qty, cDate, req.session.userId,
-      note || `แปลงจาก ${sourceProduct.name} (${sourceProduct.sku_code})`
+      note || (sameProduct
+        ? `ย้ายล็อตจาก ${sourceProduct.name} (${sourceProduct.sku_code}) — แก้ไขวันหมดอายุ`
+        : `แปลงจาก ${sourceProduct.name} (${sourceProduct.sku_code})`)
     );
     newBatchId = Number(bInfo.lastInsertRowid);
     insertInTxn.run(newBatchId, destProductId, qty, cDate, inCounterparty, req.session.userId, note || null);
