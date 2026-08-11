@@ -87,6 +87,30 @@ router.patch('/:id', requireAuth, requireEdit, (req, res) => {
   res.json({ ok: true });
 });
 
+// Delete a mistaken issue-stock (OUT) record entirely, restoring its quantity back to the
+// batch it was drawn from.
+router.delete('/:id', requireAuth, requireEdit, (req, res) => {
+  const txn = db.prepare('SELECT * FROM stock_transactions WHERE id = ?').get(req.params.id);
+  if (!txn) return res.status(404).json({ error: 'ไม่พบรายการ' });
+  if (txn.type !== 'OUT') return res.status(400).json({ error: 'ลบได้เฉพาะรายการเบิกออก' });
+
+  const batch = db.prepare('SELECT * FROM batches WHERE id = ?').get(txn.batch_id);
+
+  db.exec('BEGIN');
+  try {
+    if (batch) {
+      db.prepare('UPDATE batches SET quantity_remaining = ? WHERE id = ?').run(batch.quantity_remaining + txn.quantity, batch.id);
+    }
+    db.prepare('DELETE FROM stock_transactions WHERE id = ?').run(req.params.id);
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    return res.status(500).json({ error: 'ลบรายการเบิกออกไม่สำเร็จ', detail: err.message });
+  }
+
+  res.json({ ok: true });
+});
+
 router.get('/export.csv', requireAuth, (req, res) => {
   const isAdmin = req.session.role === 'admin';
   const { where, params } = buildQuery(req.query);

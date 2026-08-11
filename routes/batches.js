@@ -111,6 +111,31 @@ router.patch('/:batchId', requireAuth, requireEdit, (req, res) => {
   res.json({ ok: true });
 });
 
+// Delete a mistaken receive-stock (IN) record entirely — removes the batch and its IN
+// transaction together. Blocked if anything else already references this batch (a later
+// issue/adjustment, a claim, or a purchase order marked received into it).
+router.delete('/:batchId', requireAuth, requireEdit, (req, res) => {
+  const batch = db.prepare('SELECT * FROM batches WHERE id = ?').get(req.params.batchId);
+  if (!batch) return res.status(404).json({ error: 'ไม่พบล็อตสินค้า' });
+
+  db.exec('BEGIN');
+  try {
+    db.prepare("DELETE FROM stock_transactions WHERE batch_id = ? AND type = 'IN'").run(batch.id);
+    db.prepare('DELETE FROM batches WHERE id = ?').run(batch.id);
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    if (String(err.message).includes('FOREIGN KEY')) {
+      return res.status(409).json({
+        error: 'ลบไม่ได้ เพราะล็อตนี้มีการเบิกออก/ปรับปรุง/เคลม หรือถูกอ้างอิงจากรายการสั่งซื้ออยู่ในระบบ — แก้ไขจำนวนแทนการลบ',
+      });
+    }
+    return res.status(500).json({ error: 'ลบรายการรับสินค้าเข้าไม่สำเร็จ', detail: err.message });
+  }
+
+  res.json({ ok: true });
+});
+
 // Manual adjustment (e.g. correction, damage/write-off) - can be positive or negative
 router.post('/:batchId/adjust', requireAuth, requireEdit, (req, res) => {
   const { quantityDelta, note, transactionDate } = req.body || {};

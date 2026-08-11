@@ -1365,6 +1365,7 @@ async function renderHistory(container) {
             <div class="form-row">
               <button type="submit" class="primary">บันทึกการแก้ไข</button>
               <button type="button" class="secondary hfe-cancel">ยกเลิก</button>
+              <button type="button" class="secondary hfe-delete">ลบรายการนี้</button>
             </div>
             <div class="hfe-msg"></div>
           </form>
@@ -1420,6 +1421,23 @@ async function renderHistory(container) {
               purpose: form.querySelector('.hfe-purpose').value,
               requisitionNo: form.querySelector('.hfe-req-no').value || null,
             });
+          }
+          await load();
+        } catch (err) {
+          msg.innerHTML = `<p class="msg error">${escapeHtml(err.message)}</p>`;
+        }
+      });
+      form.querySelector('.hfe-delete').addEventListener('click', async () => {
+        const msg = form.querySelector('.hfe-msg');
+        msg.innerHTML = '';
+        const { id, type, batchId } = form.dataset;
+        const label = type === 'IN' ? 'รายการรับสินค้าเข้า' : 'รายการเบิกสินค้าออก';
+        if (!confirm(`ลบ${label}นี้ใช่หรือไม่? การลบไม่สามารถย้อนกลับได้`)) return;
+        try {
+          if (type === 'IN') {
+            await api('DELETE', `/api/batches/${batchId}`);
+          } else {
+            await api('DELETE', `/api/transactions/${id}`);
           }
           await load();
         } catch (err) {
