@@ -1,7 +1,7 @@
 const express = require('express');
 const db = require('../db');
 const {
-  requireAuth, requireAdmin, requireCreate, requireEdit,
+  requireAuth, requireCreate, requireEdit,
 } = require('../middleware/auth');
 
 const router = express.Router();
@@ -27,8 +27,6 @@ router.post('/', requireAuth, requireCreate, (req, res) => {
   res.status(201).json({ id: Number(info.lastInsertRowid) });
 });
 
-// Lightweight update for forecast inputs (lead time, reorder level) — open to any staff member,
-// unlike the admin-only structural edit below, since this is operational info staff learn day to day.
 router.patch('/:id/forecast-settings', requireAuth, requireEdit, (req, res) => {
   const { leadTimeDays, reorderLevel } = req.body || {};
   const product = db.prepare('SELECT * FROM products WHERE id = ?').get(req.params.id);
@@ -42,7 +40,7 @@ router.patch('/:id/forecast-settings', requireAuth, requireEdit, (req, res) => {
   res.json({ ok: true });
 });
 
-router.put('/:id', requireAuth, requireAdmin, (req, res) => {
+router.put('/:id', requireAuth, requireEdit, (req, res) => {
   const {
     skuCode, name, brand, color, unit, reorderLevel, note, archived,
   } = req.body || {};
@@ -72,7 +70,7 @@ router.put('/:id', requireAuth, requireAdmin, (req, res) => {
   res.json({ ok: true });
 });
 
-router.delete('/:id', requireAuth, requireAdmin, (req, res) => {
+router.delete('/:id', requireAuth, requireEdit, (req, res) => {
   const product = db.prepare('SELECT id FROM products WHERE id = ?').get(req.params.id);
   if (!product) return res.status(404).json({ error: 'ไม่พบสินค้า' });
   try {

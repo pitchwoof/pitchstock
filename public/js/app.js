@@ -1825,17 +1825,17 @@ async function renderOrders(container) {
 // ---------- Products ----------
 async function renderProducts(container) {
   const products = await api('GET', '/api/products?includeArchived=1');
-  const isAdmin = state.user.role === 'admin';
+  const editable = canEdit();
   const rows = products.map((p) => `
     <tr>
-      <td>${isAdmin ? `<input type="text" class="pf-sku" data-id="${p.id}" value="${escapeHtml(p.sku_code)}" style="min-width:110px">` : escapeHtml(p.sku_code)}</td>
-      <td>${isAdmin ? `<input type="text" class="pf-name" data-id="${p.id}" value="${escapeHtml(p.name)}" style="min-width:160px">` : escapeHtml(p.name)}</td>
-      <td>${isAdmin ? `<input type="text" class="pf-brand" data-id="${p.id}" value="${escapeHtml(p.brand || '')}" style="min-width:100px">` : escapeHtml(p.brand || '')}</td>
-      <td>${isAdmin ? `<input type="text" class="pf-unit" data-id="${p.id}" value="${escapeHtml(p.unit)}" style="width:70px">` : escapeHtml(p.unit)}</td>
+      <td>${editable ? `<input type="text" class="pf-sku" data-id="${p.id}" value="${escapeHtml(p.sku_code)}" style="min-width:110px">` : escapeHtml(p.sku_code)}</td>
+      <td>${editable ? `<input type="text" class="pf-name" data-id="${p.id}" value="${escapeHtml(p.name)}" style="min-width:160px">` : escapeHtml(p.name)}</td>
+      <td>${editable ? `<input type="text" class="pf-brand" data-id="${p.id}" value="${escapeHtml(p.brand || '')}" style="min-width:100px">` : escapeHtml(p.brand || '')}</td>
+      <td>${editable ? `<input type="text" class="pf-unit" data-id="${p.id}" value="${escapeHtml(p.unit)}" style="width:70px">` : escapeHtml(p.unit)}</td>
       <td data-requires="edit"><input type="number" class="pf-reorder-level" data-id="${p.id}" value="${p.reorder_level}" step="any" min="0" style="width:80px"></td>
       <td data-requires="edit"><input type="number" class="pf-leadtime" data-id="${p.id}" value="${p.lead_time_days}" min="0" style="width:70px"></td>
       <td>${p.archived ? '<span class="badge low">เก็บถาวร</span>' : '<span class="badge ok">ใช้งานอยู่</span>'}</td>
-      <td style="white-space:nowrap">${isAdmin ? `
+      <td style="white-space:nowrap">${editable ? `
         <button class="secondary toggle-archive" data-id="${p.id}" data-archived="${p.archived}">${p.archived ? 'เลิกเก็บถาวร' : 'เก็บถาวร'}</button>
         <button type="button" class="secondary pf-delete-btn" data-id="${p.id}" data-name="${escapeHtml(p.name)}">ลบ</button>
       ` : ''}</td>
