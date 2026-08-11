@@ -189,6 +189,11 @@ router.post('/convert', requireAuth, requireCreate, (req, res) => {
     if (!inheritedExpiration) inheritedExpiration = sourceAllocation[0].batch.expiration_date;
   }
 
+  const originLots = [...new Set(sourceAllocation.map((a) => a.batch.batch_number || `ล็อต ${a.batch.id}`))].join(', ');
+  const originExpiries = [...new Set(sourceAllocation.map((a) => a.batch.expiration_date || 'ไม่ระบุ'))].join(', ');
+  const originNote = sameProduct ? `ย้ายจากล็อตเดิม: ${originLots} (วันหมดอายุเดิม: ${originExpiries})` : null;
+  const inNote = originNote ? (note ? `${note} — ${originNote}` : originNote) : (note || null);
+
   let newBatchId;
   db.exec('BEGIN');
   try {
@@ -206,11 +211,11 @@ router.post('/convert', requireAuth, requireCreate, (req, res) => {
       destProductId, destBatchNumber || `CONV-${sourceProduct.sku_code}-${cDate}`, inheritedExpiration,
       qty, qty, cDate, req.session.userId,
       note || (sameProduct
-        ? `ย้ายล็อตจาก ${sourceProduct.name} (${sourceProduct.sku_code}) — แก้ไขวันหมดอายุ`
+        ? `ย้ายล็อตจาก ${originLots} (วันหมดอายุเดิม: ${originExpiries}) — แก้ไขวันหมดอายุ`
         : `แปลงจาก ${sourceProduct.name} (${sourceProduct.sku_code})`)
     );
     newBatchId = Number(bInfo.lastInsertRowid);
-    insertInTxn.run(newBatchId, destProductId, qty, cDate, inCounterparty, req.session.userId, note || null);
+    insertInTxn.run(newBatchId, destProductId, qty, cDate, inCounterparty, req.session.userId, inNote);
     db.exec('COMMIT');
   } catch (err) {
     db.exec('ROLLBACK');
