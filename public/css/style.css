@@ -447,6 +447,39 @@ tr.inv-toggle-row.expanded .inv-chevron { transform: rotate(90deg); }
   white-space: nowrap;
 }
 
+/* Custom dd/mm/yyyy date field pairing a text display with the native picker (see
+   enhanceDateInput in app.js) — native <input type="date"> can't be reformatted directly. */
+.date-field { display: inline-flex; align-items: center; gap: 6px; width: 100%; max-width: 190px; vertical-align: middle; }
+.date-field .date-display { width: auto; flex: 1; min-width: 0; }
+.date-pick-wrap { position: relative; display: inline-flex; flex: none; }
+.date-native-hidden {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  pointer-events: none;
+  border: 0;
+  padding: 0;
+  width: 30px;
+  height: 30px;
+}
+.date-pick-btn {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  color: var(--text);
+  font-size: 14px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+}
+.date-pick-btn:hover { border-color: var(--primary); background: color-mix(in srgb, var(--primary) 6%, transparent); }
+.date-pick-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
 /* Print / "export as PDF" (via the browser's native print-to-PDF) */
 @media print {
   .topbar, .no-print { display: none !important; }

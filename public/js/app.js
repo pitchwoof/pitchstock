@@ -175,6 +175,104 @@ function fmtNum(n) {
   const v = Number(n);
   return Number.isInteger(v) ? String(v) : v.toFixed(2);
 }
+// Native <input type="date"> always shows/parses using the browser's OS locale (mm/dd/yyyy on
+// most Windows setups), which we can't override directly. Instead we keep the native input as
+// the source of truth (hidden, used only to open the real calendar picker) and pair it with a
+// visible text field that displays/accepts dd/mm/yyyy in the user's chosen year era. Overriding
+// the native input's `value` property means existing code that reads/sets `.value` by id keeps
+// working unchanged.
+function enhanceDateInput(nativeInput) {
+  if (!nativeInput || nativeInput.dataset.dateEnhanced) return;
+  nativeInput.dataset.dateEnhanced = '1';
+
+  const wrap = document.createElement('span');
+  wrap.className = 'date-field';
+  nativeInput.insertAdjacentElement('beforebegin', wrap);
+
+  const display = document.createElement('input');
+  display.type = 'text';
+  display.className = 'date-display';
+  display.placeholder = 'วว/ดด/ปปปป';
+  display.inputMode = 'numeric';
+  display.autocomplete = 'off';
+
+  const pickWrap = document.createElement('span');
+  pickWrap.className = 'date-pick-wrap';
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'date-pick-btn';
+  btn.title = 'เปิดปฏิทิน';
+  btn.textContent = '📅';
+  btn.tabIndex = -1;
+
+  wrap.appendChild(display);
+  wrap.appendChild(pickWrap);
+  pickWrap.appendChild(nativeInput);
+  pickWrap.appendChild(btn);
+  nativeInput.classList.add('date-native-hidden');
+  nativeInput.tabIndex = -1;
+
+  if (nativeInput.disabled) { display.disabled = true; btn.disabled = true; }
+
+  const proto = Object.getPrototypeOf(nativeInput);
+  const desc = Object.getOwnPropertyDescriptor(proto, 'value');
+
+  function isoToDisplay(iso) {
+    const m = String(iso || '').match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (!m) return '';
+    const [, y, mo, d] = m;
+    const year = getYearEra() === 'be' ? Number(y) + 543 : Number(y);
+    return `${d}/${mo}/${year}`;
+  }
+  function displayToIso(str) {
+    const m = String(str || '').trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+    if (!m) return null;
+    const d = m[1].padStart(2, '0');
+    const mo = m[2].padStart(2, '0');
+    let year = Number(m[3]);
+    if (getYearEra() === 'be') year -= 543;
+    if (Number(mo) < 1 || Number(mo) > 12 || Number(d) < 1 || Number(d) > 31 || year < 1000) return null;
+    return `${year}-${mo}-${d}`;
+  }
+
+  function syncFromNative() { display.value = isoToDisplay(desc.get.call(nativeInput)); }
+  syncFromNative();
+
+  Object.defineProperty(nativeInput, 'value', {
+    get() { return desc.get.call(nativeInput); },
+    set(v) { desc.set.call(nativeInput, v); syncFromNative(); },
+    configurable: true,
+  });
+
+  nativeInput.addEventListener('input', syncFromNative);
+  nativeInput.addEventListener('change', syncFromNative);
+
+  display.addEventListener('input', () => {
+    const iso = displayToIso(display.value);
+    if (iso !== null) {
+      desc.set.call(nativeInput, iso);
+      nativeInput.dispatchEvent(new Event('input', { bubbles: true }));
+      nativeInput.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+  });
+  display.addEventListener('blur', syncFromNative);
+
+  btn.addEventListener('click', () => {
+    if (nativeInput.disabled) return;
+    if (typeof nativeInput.showPicker === 'function') {
+      try { nativeInput.showPicker(); return; } catch { /* fall through */ }
+    }
+    nativeInput.focus();
+  });
+
+  if (nativeInput.form) {
+    nativeInput.form.addEventListener('reset', () => setTimeout(syncFromNative, 0));
+  }
+}
+function enhanceDateInputs(root) {
+  (root || document).querySelectorAll('input[type="date"]:not([data-date-enhanced])').forEach(enhanceDateInput);
+}
+
 function formatMonthLabel(yyyyMM) {
   const [y, m] = yyyyMM.split('-').map(Number);
   const months = ['ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.', 'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.'];
@@ -855,6 +953,7 @@ async function renderReceive(container) {
       msg.innerHTML = `<p class="msg error">${escapeHtml(err.message)}</p>`;
     }
   });
+  enhanceDateInputs(container);
 }
 
 // ---------- Issue stock (outflow) ----------
@@ -1026,9 +1125,10 @@ async function renderIssue(container) {
           const cell = btn.closest('.if-exp-cell');
           const batchId = btn.closest('tr').dataset.batchId;
           cell.innerHTML = `
-            <input type="date" class="if-exp-input" style="width:140px;display:inline-block">
+            <input type="date" class="if-exp-input">
             <button type="button" class="secondary if-save-exp">บันทึก</button>
           `;
+          enhanceDateInputs(cell);
           const saveBtn = cell.querySelector('.if-save-exp');
           saveBtn.addEventListener('click', async () => {
             const newDate = cell.querySelector('.if-exp-input').value;
@@ -1270,6 +1370,7 @@ async function renderIssue(container) {
       msg.innerHTML = `<p class="msg error">${escapeHtml(err.message)}</p>`;
     }
   });
+  enhanceDateInputs(container);
 }
 
 // ---------- History ----------
@@ -1469,6 +1570,7 @@ async function renderHistory(container) {
         }
       });
     });
+    enhanceDateInputs(container);
   }
 
   document.getElementById('hf-apply').addEventListener('click', load);
@@ -1704,6 +1806,7 @@ async function renderClaims(container) {
 
   document.getElementById('clf-apply').addEventListener('click', loadClaims);
   await loadClaims();
+  enhanceDateInputs(container);
 }
 
 // ---------- Purchase orders (ordered, not yet arrived) ----------
@@ -1858,6 +1961,7 @@ async function renderOrders(container) {
       });
     });
     applyPermissionGates(container);
+    enhanceDateInputs(container);
   }
 
   document.getElementById('off-apply').addEventListener('click', loadOrders);
