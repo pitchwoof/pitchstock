@@ -899,6 +899,7 @@ async function renderReceive(container) {
     document.getElementById('rf-product').value = claim.product_id;
     document.getElementById('rf-qty').value = claim.quantity;
     document.getElementById('rf-expiry').value = claim.expiration_date || '';
+    document.getElementById('rf-batch').value = `รับคืน ${fmtDate(new Date().toISOString().slice(0, 10))}`;
     const noteParts = [
       `รับคืนจากลูกค้า ${claim.counterparty || ''}`,
       `(อ้างอิงเคลม #${claim.id})`,
