@@ -31,9 +31,11 @@ router.get('/', requireAuth, (req, res) => {
 
 router.get('/:id', requireAuth, (req, res) => {
   const claim = db.prepare(`
-    SELECT c.*, p.name AS product_name, p.sku_code, p.unit
+    SELECT c.*, p.name AS product_name, p.sku_code, p.unit,
+           b.batch_number, b.expiration_date
     FROM claims c
     JOIN products p ON p.id = c.product_id
+    LEFT JOIN batches b ON b.id = c.batch_id
     WHERE c.id = ?
   `).get(req.params.id);
   if (!claim) return res.status(404).json({ error: 'ไม่พบรายการเคลม' });
@@ -50,13 +52,12 @@ router.post('/', requireAuth, requireCreate, (req, res) => {
   if (!productId || !quantity || quantity <= 0) {
     return res.status(400).json({ error: 'กรุณาระบุสินค้าและจำนวนที่มากกว่า 0' });
   }
+  if (!batchId) return res.status(400).json({ error: 'กรุณาระบุล็อตสินค้า' });
   const product = db.prepare('SELECT * FROM products WHERE id = ?').get(productId);
   if (!product) return res.status(404).json({ error: 'ไม่พบสินค้า' });
 
-  if (batchId) {
-    const batch = db.prepare('SELECT id FROM batches WHERE id = ? AND product_id = ?').get(batchId, productId);
-    if (!batch) return res.status(404).json({ error: 'ไม่พบล็อตนี้สำหรับสินค้าดังกล่าว' });
-  }
+  const batch = db.prepare('SELECT id FROM batches WHERE id = ? AND product_id = ?').get(batchId, productId);
+  if (!batch) return res.status(404).json({ error: 'ไม่พบล็อตนี้สำหรับสินค้าดังกล่าว' });
 
   const cat = VALID_CATEGORIES.includes(category) ? category : 'other';
   const cDate = claimDate || new Date().toISOString().slice(0, 10);

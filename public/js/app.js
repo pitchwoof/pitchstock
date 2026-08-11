@@ -56,7 +56,7 @@ function applyPermissionGates(root) {
   }
 }
 const TYPE_LABEL = { IN: 'รับเข้า', OUT: 'เบิกออก', ADJUST: 'ปรับปรุง' };
-const PURPOSE_LABEL = { sale: 'ขาย', trial: 'ทดลอง/ตัวอย่าง' };
+const PURPOSE_LABEL = { sale: 'ขาย', trial: 'ทดลอง/ตัวอย่าง', claim: 'เคลม', gift: 'แถมให้ลูกค้า' };
 const EXPIRY_STATUS_LABEL = { expired: 'หมดอายุ', critical: 'ใกล้หมดอายุมาก', warning: 'เฝ้าระวัง', ok: 'ปกติ', none: 'ไม่ระบุ' };
 const ALERT_TYPE_LABEL = { low_stock: 'สต็อกต่ำ', expired: 'หมดอายุ', expiring_soon: 'ใกล้หมดอายุ' };
 
@@ -594,7 +594,7 @@ async function renderDashboard(container) {
     ? d.recentTransactions.map((t) => `
         <tr>
           <td>${fmtDate(t.transaction_date)}</td>
-          <td>${TYPE_LABEL[t.type] || t.type}${t.type === 'OUT' && t.purpose === 'trial' ? ' <span class="badge critical">ทดลอง</span>' : ''}</td>
+          <td>${TYPE_LABEL[t.type] || t.type}${t.type === 'OUT' && t.purpose && t.purpose !== 'sale' ? ` <span class="badge critical">${PURPOSE_LABEL[t.purpose] || t.purpose}</span>` : ''}</td>
           <td>${escapeHtml(t.product_name)}</td>
           <td class="right">${fmtNum(t.quantity)}</td>
           <td>${escapeHtml(t.counterparty || '')}</td>
@@ -839,7 +839,8 @@ async function renderReceive(container) {
         กำลังรับคืนเข้าคลังจากรายการเคลม #${claim.id} —
         ${CLAIM_TYPE_LABEL[claim.type] || claim.type} จาก ${escapeHtml(claim.counterparty || '—')}:
         ${escapeHtml(claim.product_name)} จำนวน ${fmtNum(claim.quantity)} ${escapeHtml(claim.unit)}
-        (แบบฟอร์มด้านล่างกรอกข้อมูลเบื้องต้นให้แล้ว ตรวจสอบและระบุวันหมดอายุ/ล็อตก่อนบันทึก)
+        (กรอกจำนวนและวันหมดอายุจากล็อตเดิมให้แล้ว ตรวจสอบก่อนบันทึก —
+        ถ้าบางส่วนรับเข้าคลังไม่ได้ เช่น น้ำหนักหมึกต่ำหรือหมดอายุแล้ว ให้ปรับจำนวนลง และแก้วันหมดอายุถ้าไม่ตรงกับสภาพจริง)
       </div>
     ` : ''}
     ${po ? `
@@ -874,6 +875,7 @@ async function renderReceive(container) {
           <input type="date" id="rf-date" value="${new Date().toISOString().slice(0, 10)}">
         </label>
       </div>
+      ${claim ? '<p class="muted" style="margin-top:-8px">ปรับจำนวนลงได้หากบางส่วนรับเข้าคลังไม่ได้ (เช่น น้ำหนักหมึกต่ำ หรือหมดอายุแล้ว) — ระบบจะบันทึกส่วนต่างไว้ในผลการดำเนินการของรายการเคลม</p>' : ''}
       <label class="field">หมายเหตุ
         <textarea id="rf-note" rows="2"></textarea>
       </label>
@@ -896,8 +898,9 @@ async function renderReceive(container) {
     }
     document.getElementById('rf-product').value = claim.product_id;
     document.getElementById('rf-qty').value = claim.quantity;
+    document.getElementById('rf-expiry').value = claim.expiration_date || '';
     const noteParts = [
-      `รับคืนจาก${claim.type === 'supplier_claim' ? 'ซัพพลายเออร์' : 'ลูกค้า'} ${claim.counterparty || ''}`,
+      `รับคืนจากลูกค้า ${claim.counterparty || ''}`,
       `(อ้างอิงเคลม #${claim.id})`,
     ];
     if (claim.details) noteParts.push(`— ${claim.details}`);
@@ -933,9 +936,14 @@ async function renderReceive(container) {
         note: document.getElementById('rf-note').value || null,
       });
       if (claim) {
+        const receivedQty = Number(document.getElementById('rf-qty').value);
+        const shortfall = claim.quantity - receivedQty;
+        const resolutionNote = shortfall > 0.0001
+          ? `รับคืนเข้าคลัง ${fmtNum(receivedQty)} จาก ${fmtNum(claim.quantity)} ${claim.unit} (ล็อตใหม่ #${result.batchId}) — อีก ${fmtNum(shortfall)} ${claim.unit} รับเข้าคลังไม่ได้`
+          : `รับคืนเข้าคลังแล้ว (ล็อตใหม่ #${result.batchId})`;
         await api('PATCH', `/api/claims/${claim.id}`, {
           status: 'resolved',
-          resolutionNote: `รับคืนเข้าคลังแล้ว (ล็อตใหม่ #${result.batchId})`,
+          resolutionNote,
         });
         msg.innerHTML = '<p class="msg success">รับสินค้าเข้าคลังเรียบร้อยแล้ว และอัปเดตสถานะเคลมเป็น "เสร็จสิ้น" แล้ว — <a href="#/claims">กลับไปหน้าเคลม/ตีกลับ</a></p>';
       } else if (po) {
@@ -999,6 +1007,8 @@ async function renderIssue(container) {
           <select id="if-purpose">
             <option value="sale">ขายให้ลูกค้า</option>
             <option value="trial">ให้ทดลอง/ตัวอย่าง</option>
+            <option value="claim">เคลม</option>
+            <option value="gift">แถมให้ลูกค้า</option>
           </select>
         </label>
         <label class="field">ลูกค้า
@@ -1398,6 +1408,8 @@ async function renderHistory(container) {
             <option value="">ทั้งหมด</option>
             <option value="sale">ขาย</option>
             <option value="trial">ทดลอง/ตัวอย่าง</option>
+            <option value="claim">เคลม</option>
+            <option value="gift">แถมให้ลูกค้า</option>
           </select>
         </label>
         <label class="field">จาก <input type="date" id="hf-from"></label>
@@ -1434,7 +1446,7 @@ async function renderHistory(container) {
       const mainRow = `
       <tr class="${rowEditable ? 'inv-toggle-row' : ''}" ${rowEditable ? `data-toggle="${editRowId}"` : ''}>
         <td>${fmtDate(t.transaction_date)}</td>
-        <td>${TYPE_LABEL[t.type] || t.type}${t.type === 'OUT' && t.purpose === 'trial' ? ' <span class="badge critical">ทดลอง/ตัวอย่าง</span>' : ''}</td>
+        <td>${TYPE_LABEL[t.type] || t.type}${t.type === 'OUT' && t.purpose && t.purpose !== 'sale' ? ` <span class="badge critical">${PURPOSE_LABEL[t.purpose] || t.purpose}</span>` : ''}</td>
         <td>${escapeHtml(t.product_name)} <span class="muted">(${escapeHtml(t.sku_code)})</span></td>
         <td class="muted">${escapeHtml(t.batch_number || '')}</td>
         <td>${fmtDate(t.expiration_date)}</td>
@@ -1482,6 +1494,8 @@ async function renderHistory(container) {
               <select class="hfe-purpose">
                 <option value="sale" ${t.purpose === 'sale' ? 'selected' : ''}>ขายให้ลูกค้า</option>
                 <option value="trial" ${t.purpose === 'trial' ? 'selected' : ''}>ให้ทดลอง/ตัวอย่าง</option>
+                <option value="claim" ${t.purpose === 'claim' ? 'selected' : ''}>เคลม</option>
+                <option value="gift" ${t.purpose === 'gift' ? 'selected' : ''}>แถมให้ลูกค้า</option>
               </select>
             </label>` : ''}
             <label class="field">หมายเหตุ
@@ -1611,7 +1625,6 @@ function buildClaimsTableHTML(claims) {
   const rows = claims.map((c) => `
     <tr>
       <td>${fmtDate(c.claim_date)}</td>
-      <td><span class="badge ${c.type === 'customer_reject' ? 'critical' : 'expired'}">${CLAIM_TYPE_LABEL[c.type] || c.type}</span></td>
       <td>${escapeHtml(c.product_name)} <span class="muted">(${escapeHtml(c.sku_code)})</span></td>
       <td class="muted">${escapeHtml(c.batch_number || '—')}</td>
       <td class="right">${fmtNum(c.quantity)} ${escapeHtml(c.unit)}</td>
@@ -1632,11 +1645,11 @@ function buildClaimsTableHTML(claims) {
       <table>
         <thead>
           <tr>
-            <th>วันที่</th><th>ประเภท</th><th>สินค้า</th><th>ล็อต</th><th class="right">จำนวน</th>
-            <th>คู่กรณี</th><th>สาเหตุ</th><th>สถานะ</th><th>ผลการดำเนินการ</th><th>ส่งต่อให้ลูกค้าอื่น</th><th>บันทึกโดย</th><th></th>
+            <th>วันที่</th><th>สินค้า</th><th>ล็อต</th><th class="right">จำนวน</th>
+            <th>ลูกค้า</th><th>สาเหตุ</th><th>สถานะ</th><th>ผลการดำเนินการ</th><th>ส่งต่อให้ลูกค้าอื่น</th><th>บันทึกโดย</th><th></th>
           </tr>
         </thead>
-        <tbody>${rows || '<tr><td colspan="12" class="muted">ยังไม่มีรายการเคลม/ตีกลับ</td></tr>'}</tbody>
+        <tbody>${rows || '<tr><td colspan="11" class="muted">ยังไม่มีรายการเคลม/ตีกลับ</td></tr>'}</tbody>
       </table>
     </div>`;
 }
@@ -1644,23 +1657,17 @@ function buildClaimsTableHTML(claims) {
 async function renderClaims(container) {
   await loadProducts();
   container.innerHTML = `
-    <h2>เคลม/ตีกลับสินค้า</h2>
+    <h2>เคลม/ตีกลับจากลูกค้า</h2>
     <p class="muted">
       <strong>ข้อควรทราบ:</strong> การบันทึกเคลม/ตีกลับ ไม่ได้ปรับจำนวนสต็อกอัตโนมัติ —
       เป็นการบันทึกติดตามเรื่องแยกต่างหาก ถ้าท้ายที่สุดได้สินค้าคืนเข้าคลังจริง
-      (เช่น ซัพพลายเออร์เปลี่ยนสินค้าใหม่ให้) ให้บันทึกผ่านหน้า "รับสินค้าเข้า" ตามปกติ
+      ให้กดปุ่ม "รับคืนเข้าคลัง" ของรายการนั้นเพื่อไปหน้ารับสินค้าเข้าพร้อมข้อมูลกรอกให้อัตโนมัติ
       หากนำตลับที่ถูกตีกลับจากลูกค้าเจ้าหนึ่งไปส่งให้ลูกค้าอีกเจ้าแทน (โดยไม่ผ่านคลัง)
       ให้บันทึกชื่อลูกค้าและจำนวนที่ช่อง "ส่งต่อให้ลูกค้าอื่น" ในตารางด้านล่างของรายการนั้น
     </p>
     <div class="card" data-requires="create">
       <h3>บันทึกรายการใหม่</h3>
       <form id="cf-form" class="stack">
-        <label class="field">ประเภทรายการ
-          <select id="cf-type">
-            <option value="customer_reject">ลูกค้าตีกลับสินค้า</option>
-            <option value="supplier_claim">เคลมกับซัพพลายเออร์</option>
-          </select>
-        </label>
         <div class="form-row">
           <label class="field">ซัพพลายเออร์
             <select id="cf-product-supplier">${brandFilterOptionsHTML(state.products)}</select>
@@ -1669,8 +1676,8 @@ async function renderClaims(container) {
             <select id="cf-product" required>${productOptions(state.products)}</select>
           </label>
         </div>
-        <label class="field">ล็อต (ถ้าทราบ)
-          <select id="cf-batch"><option value="">— ไม่ระบุล็อต —</option></select>
+        <label class="field">ล็อต
+          <select id="cf-batch" required><option value="">— เลือกล็อต —</option></select>
         </label>
         <div class="form-row">
           <label class="field">จำนวน
@@ -1680,7 +1687,7 @@ async function renderClaims(container) {
             <input type="date" id="cf-date" value="${new Date().toISOString().slice(0, 10)}">
           </label>
         </div>
-        <label class="field"><span id="cf-counterparty-label">ชื่อลูกค้า</span>
+        <label class="field">ชื่อลูกค้า
           <input type="text" id="cf-counterparty">
         </label>
         <label class="field">สาเหตุ
@@ -1695,13 +1702,6 @@ async function renderClaims(container) {
     </div>
     <div class="card">
       <div class="filters">
-        <label class="field">ประเภท
-          <select id="clf-type">
-            <option value="">ทั้งหมด</option>
-            <option value="customer_reject">ลูกค้าตีกลับ</option>
-            <option value="supplier_claim">เคลมซัพพลายเออร์</option>
-          </select>
-        </label>
         <label class="field">สถานะ
           <select id="clf-status">
             <option value="">ทั้งหมด</option>
@@ -1714,13 +1714,9 @@ async function renderClaims(container) {
     </div>
   `;
 
-  document.getElementById('cf-type').addEventListener('change', (e) => {
-    document.getElementById('cf-counterparty-label').textContent = e.target.value === 'supplier_claim' ? 'ชื่อซัพพลายเออร์' : 'ชื่อลูกค้า';
-  });
-
   document.getElementById('cf-product').addEventListener('change', async (e) => {
     const batchSelect = document.getElementById('cf-batch');
-    batchSelect.innerHTML = '<option value="">— ไม่ระบุล็อต —</option>';
+    batchSelect.innerHTML = '<option value="">— เลือกล็อต —</option>';
     if (!e.target.value) return;
     const batches = await api('GET', `/api/batches/product/${e.target.value}`);
     batchSelect.innerHTML += batches.map((b) => `<option value="${b.id}">${escapeHtml(b.batch_number || `ล็อต ${b.id}`)} — เหลือ ${fmtNum(b.quantity_remaining)}</option>`).join('');
@@ -1738,7 +1734,7 @@ async function renderClaims(container) {
     msg.innerHTML = '';
     try {
       await api('POST', '/api/claims', {
-        type: document.getElementById('cf-type').value,
+        type: 'customer_reject',
         productId: Number(document.getElementById('cf-product').value),
         batchId: document.getElementById('cf-batch').value || null,
         quantity: Number(document.getElementById('cf-qty').value),
@@ -1758,9 +1754,7 @@ async function renderClaims(container) {
 
   async function loadClaims() {
     const params = new URLSearchParams();
-    const type = document.getElementById('clf-type').value;
     const status = document.getElementById('clf-status').value;
-    if (type) params.set('type', type);
     if (status) params.set('status', status);
     const claims = await api('GET', `/api/claims?${params.toString()}`);
     document.getElementById('cl-table').innerHTML = buildClaimsTableHTML(claims);

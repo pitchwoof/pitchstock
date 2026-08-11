@@ -37,7 +37,7 @@ router.get('/', requireAuth, (req, res) => {
 
 // Correct an issue-stock (OUT) record that was entered wrong. Quantity changes are re-applied
 // against the batch it was drawn from (can't exceed what's currently available in that batch).
-const VALID_PURPOSES = ['sale', 'trial'];
+const VALID_PURPOSES = ['sale', 'trial', 'claim', 'gift'];
 
 router.patch('/:id', requireAuth, requireEdit, (req, res) => {
   const {
@@ -126,7 +126,7 @@ router.get('/export.csv', requireAuth, (req, res) => {
   `).all(...params);
 
   const TYPE_LABEL = { IN: 'รับเข้า', OUT: 'เบิกออก', ADJUST: 'ปรับปรุง' };
-  const PURPOSE_LABEL = { sale: 'ขาย', trial: 'ทดลอง/ตัวอย่าง' };
+  const PURPOSE_LABEL = { sale: 'ขาย', trial: 'ทดลอง/ตัวอย่าง', claim: 'เคลม', gift: 'แถมให้ลูกค้า' };
   const header = ['วันที่', 'ประเภท', 'วัตถุประสงค์', 'รหัส SKU', 'สินค้า', 'ล็อต', 'วันหมดอายุ', 'จำนวน', 'หน่วย', 'ลูกค้า/ซัพพลายเออร์', 'ผู้ทำรายการ', 'เลขใบเบิก', 'หมายเหตุ'];
   if (isAdmin) header.push('ราคาขาย/หน่วย', 'มูลค่ารวม');
   const csvEscape = (v) => {

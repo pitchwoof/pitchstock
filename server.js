@@ -3,6 +3,7 @@ const session = require('express-session');
 const path = require('node:path');
 
 require('./db'); // ensures schema is created on startup
+const sessionStore = require('./session-store');
 
 const authRoutes = require('./routes/auth');
 const productRoutes = require('./routes/products');
@@ -24,6 +25,7 @@ if (isProd) app.set('trust proxy', 1);
 app.use(express.json());
 
 app.use(session({
+  store: sessionStore,
   secret: process.env.SESSION_SECRET || 'pitchstock-dev-secret-change-me',
   resave: false,
   saveUninitialized: false,

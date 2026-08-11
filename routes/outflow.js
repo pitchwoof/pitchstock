@@ -45,7 +45,7 @@ router.get('/preview', requireAuth, (req, res) => {
 
 // Record outflow (sale to customer, or a trial/sample handout). Auto-allocates FEFO across
 // batches unless batchId is given.
-const VALID_PURPOSES = ['sale', 'trial'];
+const VALID_PURPOSES = ['sale', 'trial', 'claim', 'gift'];
 
 router.post('/', requireAuth, requireCreate, (req, res) => {
   const { productId, quantity, customer, transactionDate, note, batchId, purpose, unitPrice, requisitionNo } = req.body || {};
