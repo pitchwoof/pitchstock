@@ -10,7 +10,7 @@ router.post('/login', (req, res) => {
   if (!username || !password) {
     return res.status(400).json({ error: 'กรุณากรอกชื่อผู้ใช้และรหัสผ่าน' });
   }
-  const user = db.prepare('SELECT * FROM users WHERE username = ? AND active = 1').get(username);
+  const user = db.prepare('SELECT * FROM users WHERE LOWER(username) = LOWER(?) AND active = 1').get(username);
   if (!user || !bcrypt.compareSync(password, user.password_hash)) {
     return res.status(401).json({ error: 'ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง' });
   }
@@ -72,7 +72,7 @@ router.post('/users', requireAuth, requireAdmin, (req, res) => {
   if (password.length < 6) {
     return res.status(400).json({ error: 'รหัสผ่านต้องมีอย่างน้อย 6 ตัวอักษร' });
   }
-  const existing = db.prepare('SELECT id FROM users WHERE username = ?').get(username);
+  const existing = db.prepare('SELECT id FROM users WHERE LOWER(username) = LOWER(?)').get(username);
   if (existing) return res.status(409).json({ error: 'มีชื่อผู้ใช้นี้อยู่แล้ว' });
 
   const finalRole = VALID_ROLES.includes(role) ? role : 'creator';
