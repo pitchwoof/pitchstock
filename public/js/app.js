@@ -742,6 +742,7 @@ function buildInventoryBrandSectionHTML(brand, products) {
   const isAdmin = state.user.role === 'admin';
   const lowCount = products.filter((p) => p.lowStock).length;
   const expiringCount = products.filter((p) => p.expiryStatus === 'critical' || p.expiryStatus === 'expired').length;
+  const colCount = isAdmin ? 6 : 5;
 
   const rows = products.map((p) => {
     const hasBatches = p.batches.length > 0;
@@ -752,8 +753,42 @@ function buildInventoryBrandSectionHTML(brand, products) {
         <td class="muted">ล็อต ${escapeHtml(b.batchNumber || String(b.id))} <span class="muted">${escapeHtml(b.supplier || '')}</span></td>
         <td>${daysUntilLabel(b.daysUntilExpiry)} <span class="muted">${b.expirationDate ? `(${fmtDate(b.expirationDate)})` : ''}</span> <span class="badge ${b.status}">${EXPIRY_STATUS_LABEL[b.status] || b.status}</span></td>
         <td class="right">${fmtNum(b.quantityRemaining)}</td>
-        <td></td>
+        <td data-requires="edit"><button type="button" class="secondary ibe-toggle" data-batch-id="${b.id}" style="font-size:12.5px;padding:6px 10px">แก้ไข</button></td>
         ${isAdmin ? `<td class="right muted">${b.unitCost != null ? fmtNum(b.unitCost) : '—'}</td>` : ''}
+      </tr>
+      <tr class="hidden inv-edit-row" data-parent="${rowId}" id="batch-edit-${b.id}">
+        <td colspan="${colCount}">
+          <form class="inv-batch-edit-form stack" data-batch-id="${b.id}" style="max-width:640px;margin:8px 0">
+            <div class="form-row">
+              <label class="field">หมายเลขล็อต
+                <input type="text" class="ibe-batch-number" value="${escapeHtml(b.batchNumber || '')}">
+              </label>
+              <label class="field">ซัพพลายเออร์
+                <input type="text" class="ibe-supplier" value="${escapeHtml(b.supplier || '')}">
+              </label>
+            </div>
+            <div class="form-row">
+              <label class="field">วันหมดอายุ
+                <input type="date" class="ibe-expiry" value="${b.expirationDate || ''}">
+              </label>
+              <label class="field">วันที่รับเข้า
+                <input type="date" class="ibe-received" value="${b.receivedDate || ''}">
+              </label>
+            </div>
+            <label class="field">จำนวนที่รับเข้า (ทั้งหมด)
+              <input type="number" class="ibe-qty" step="any" min="0.01" value="${b.quantityReceived}" required>
+            </label>
+            <label class="field">หมายเหตุ
+              <textarea class="ibe-note" rows="2">${escapeHtml(b.note || '')}</textarea>
+            </label>
+            <div class="form-row">
+              <button type="submit" class="primary">บันทึกการแก้ไข</button>
+              <button type="button" class="secondary ibe-cancel">ยกเลิก</button>
+              <button type="button" class="secondary ibe-delete">ลบล็อตนี้</button>
+            </div>
+            <div class="ibe-msg"></div>
+          </form>
+        </td>
       </tr>`).join('');
 
     return `
@@ -790,30 +825,84 @@ function buildInventoryBrandSectionHTML(brand, products) {
 }
 
 async function renderInventory(container) {
-  const inv = await api('GET', '/api/inventory');
-  const sections = groupByBrand(inv)
-    .map(([brand, products]) => buildInventoryBrandSectionHTML(brand, products))
-    .join('');
+  async function load() {
+    const inv = await api('GET', '/api/inventory');
+    const sections = groupByBrand(inv)
+      .map(([brand, products]) => buildInventoryBrandSectionHTML(brand, products))
+      .join('');
 
-  container.innerHTML = `
-    <div class="chart-header">
-      <h2>คลังสินค้า</h2>
-      <button type="button" id="inv-export-csv" class="secondary no-print">ส่งออก CSV</button>
-    </div>
-    ${sections || '<div class="card"><p class="muted">ยังไม่มีสินค้า</p></div>'}
-  `;
+    container.innerHTML = `
+      <div class="chart-header">
+        <h2>คลังสินค้า</h2>
+        <button type="button" id="inv-export-csv" class="secondary no-print">ส่งออก CSV</button>
+      </div>
+      ${sections || '<div class="card"><p class="muted">ยังไม่มีสินค้า</p></div>'}
+    `;
 
-  container.querySelectorAll('.inv-toggle-row').forEach((row) => {
-    row.addEventListener('click', () => {
-      const id = row.dataset.toggle;
-      const expanding = row.classList.toggle('expanded');
-      container.querySelectorAll(`[data-parent="${id}"]`).forEach((r) => r.classList.toggle('hidden', !expanding));
+    container.querySelectorAll('.inv-toggle-row').forEach((row) => {
+      row.addEventListener('click', () => {
+        const id = row.dataset.toggle;
+        const expanding = row.classList.toggle('expanded');
+        container.querySelectorAll(`.batch-subtable[data-parent="${id}"]`).forEach((r) => r.classList.toggle('hidden', !expanding));
+        if (!expanding) {
+          container.querySelectorAll(`.inv-edit-row[data-parent="${id}"]`).forEach((r) => r.classList.add('hidden'));
+        }
+      });
     });
-  });
 
-  document.getElementById('inv-export-csv').addEventListener('click', () => {
-    window.open('/api/inventory/export.csv', '_blank');
-  });
+    document.getElementById('inv-export-csv').addEventListener('click', () => {
+      window.open('/api/inventory/export.csv', '_blank');
+    });
+
+    container.querySelectorAll('.ibe-toggle').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const row = document.getElementById(`batch-edit-${btn.dataset.batchId}`);
+        if (row) row.classList.toggle('hidden');
+      });
+    });
+
+    container.querySelectorAll('.inv-batch-edit-form').forEach((form) => {
+      form.addEventListener('click', (e) => e.stopPropagation());
+      form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const msg = form.querySelector('.ibe-msg');
+        msg.innerHTML = '';
+        try {
+          await api('PATCH', `/api/batches/${form.dataset.batchId}`, {
+            batchNumber: form.querySelector('.ibe-batch-number').value || null,
+            expirationDate: form.querySelector('.ibe-expiry').value || null,
+            quantity: Number(form.querySelector('.ibe-qty').value),
+            supplier: form.querySelector('.ibe-supplier').value || null,
+            receivedDate: form.querySelector('.ibe-received').value || null,
+            note: form.querySelector('.ibe-note').value || null,
+          });
+          await load();
+        } catch (err) {
+          msg.innerHTML = `<p class="msg error">${escapeHtml(err.message)}</p>`;
+        }
+      });
+      form.querySelector('.ibe-cancel').addEventListener('click', () => {
+        form.closest('tr').classList.add('hidden');
+      });
+      form.querySelector('.ibe-delete').addEventListener('click', async () => {
+        if (!confirm('ลบล็อตนี้ใช่หรือไม่? การลบไม่สามารถย้อนกลับได้')) return;
+        const msg = form.querySelector('.ibe-msg');
+        msg.innerHTML = '';
+        try {
+          await api('DELETE', `/api/batches/${form.dataset.batchId}`);
+          await load();
+        } catch (err) {
+          msg.innerHTML = `<p class="msg error">${escapeHtml(err.message)}</p>`;
+        }
+      });
+    });
+
+    applyPermissionGates(container);
+    enhanceDateInputs(container);
+  }
+
+  await load();
 }
 
 // ---------- Receive stock (inflow) ----------
