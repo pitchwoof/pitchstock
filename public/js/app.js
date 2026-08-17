@@ -1525,6 +1525,13 @@ async function renderHistory(container) {
     const isAdmin = state.user.role === 'admin';
     const rows = await api('GET', `/api/transactions?${currentQuery()}`);
     const colCount = isAdmin ? 13 : 11;
+
+    const outProductIds = [...new Set(rows.filter((t) => t.type === 'OUT' && canEdit()).map((t) => t.product_id))];
+    const batchesByProduct = {};
+    await Promise.all(outProductIds.map(async (pid) => {
+      batchesByProduct[pid] = await api('GET', `/api/batches/product/${pid}`);
+    }));
+
     const body = rows.map((t) => {
       const rowEditable = (t.type === 'IN' || t.type === 'OUT') && canEdit();
       const editRowId = `hf-edit-${t.id}`;
@@ -1557,6 +1564,12 @@ async function renderHistory(container) {
                 <input type="date" class="hfe-expiry" value="${t.expiration_date || ''}">
               </label>
             </div>` : ''}
+            ${t.type === 'OUT' ? `
+            <label class="field">ล็อต
+              <select class="hfe-batch">
+                ${(batchesByProduct[t.product_id] || []).map((b) => `<option value="${b.id}" ${b.id === t.batch_id ? 'selected' : ''}>${escapeHtml(b.batch_number || `ล็อต ${b.id}`)} — เหลือ ${fmtNum(b.quantity_remaining)} (${fmtDate(b.expiration_date)})</option>`).join('')}
+              </select>
+            </label>` : ''}
             <div class="form-row">
               <label class="field">จำนวน
                 <input type="number" class="hfe-qty" step="any" min="0.01" value="${t.quantity}" required>
@@ -1637,6 +1650,7 @@ async function renderHistory(container) {
               note: form.querySelector('.hfe-note').value || null,
             });
           } else {
+            const lotSelect = form.querySelector('.hfe-batch');
             await api('PATCH', `/api/transactions/${id}`, {
               quantity: Number(form.querySelector('.hfe-qty').value),
               transactionDate: form.querySelector('.hfe-date').value || null,
@@ -1644,6 +1658,7 @@ async function renderHistory(container) {
               note: form.querySelector('.hfe-note').value || null,
               purpose: form.querySelector('.hfe-purpose').value,
               requisitionNo: form.querySelector('.hfe-req-no').value || null,
+              batchId: lotSelect ? lotSelect.value : undefined,
             });
           }
           await load();

@@ -41,24 +41,40 @@ const VALID_PURPOSES = ['sale', 'trial', 'claim', 'gift'];
 
 router.patch('/:id', requireAuth, requireEdit, (req, res) => {
   const {
-    quantity, transactionDate, counterparty, note, purpose, unitPrice, requisitionNo,
+    quantity, transactionDate, counterparty, note, purpose, unitPrice, requisitionNo, batchId,
   } = req.body || {};
   const txn = db.prepare('SELECT * FROM stock_transactions WHERE id = ?').get(req.params.id);
   if (!txn) return res.status(404).json({ error: 'ไม่พบรายการ' });
   if (txn.type !== 'OUT') return res.status(400).json({ error: 'แก้ไขได้เฉพาะรายการเบิกออก' });
 
-  const batch = db.prepare('SELECT * FROM batches WHERE id = ?').get(txn.batch_id);
+  const oldBatch = db.prepare('SELECT * FROM batches WHERE id = ?').get(txn.batch_id);
+  const newBatchId = batchId !== undefined && batchId ? Number(batchId) : txn.batch_id;
+  const changingBatch = newBatchId !== txn.batch_id;
+
+  let newBatch = oldBatch;
+  if (changingBatch) {
+    newBatch = db.prepare('SELECT * FROM batches WHERE id = ?').get(newBatchId);
+    if (!newBatch) return res.status(404).json({ error: 'ไม่พบล็อตใหม่ที่ระบุ' });
+    if (newBatch.product_id !== txn.product_id) {
+      return res.status(400).json({ error: 'ล็อตใหม่ต้องเป็นของสินค้าเดียวกัน' });
+    }
+  }
+
   let newQty = txn.quantity;
-  let newRemaining = batch.quantity_remaining;
   if (quantity !== undefined) {
     const qty = Number(quantity);
     if (!qty || qty <= 0) return res.status(400).json({ error: 'จำนวนต้องมากกว่า 0' });
-    const delta = qty - txn.quantity;
-    newRemaining = batch.quantity_remaining - delta;
-    if (newRemaining < 0) {
-      return res.status(400).json({ error: `ล็อตนี้เหลือไม่พอสำหรับจำนวนใหม่ (คงเหลือปัจจุบัน ${batch.quantity_remaining})` });
-    }
     newQty = qty;
+  }
+
+  // If moving to a different lot, give the old lot its quantity back in full and draw the new
+  // quantity fresh from the new lot. If staying on the same lot, just re-apply the delta.
+  const oldBatchNewRemaining = oldBatch.quantity_remaining + txn.quantity;
+  const newBatchNewRemaining = changingBatch
+    ? newBatch.quantity_remaining - newQty
+    : oldBatch.quantity_remaining - (newQty - txn.quantity);
+  if (newBatchNewRemaining < 0) {
+    return res.status(400).json({ error: `ล็อตที่เลือกเหลือไม่พอสำหรับจำนวนนี้ (คงเหลือปัจจุบัน ${newBatch.quantity_remaining})` });
   }
 
   const newDate = transactionDate || txn.transaction_date;
@@ -70,14 +86,17 @@ router.patch('/:id', requireAuth, requireEdit, (req, res) => {
 
   db.exec('BEGIN');
   try {
-    if (quantity !== undefined) {
-      db.prepare('UPDATE batches SET quantity_remaining = ? WHERE id = ?').run(newRemaining, batch.id);
+    if (changingBatch) {
+      db.prepare('UPDATE batches SET quantity_remaining = ? WHERE id = ?').run(oldBatchNewRemaining, oldBatch.id);
+      db.prepare('UPDATE batches SET quantity_remaining = ? WHERE id = ?').run(newBatchNewRemaining, newBatch.id);
+    } else if (quantity !== undefined) {
+      db.prepare('UPDATE batches SET quantity_remaining = ? WHERE id = ?').run(newBatchNewRemaining, oldBatch.id);
     }
     db.prepare(`
       UPDATE stock_transactions
-      SET quantity = ?, transaction_date = ?, counterparty = ?, note = ?, purpose = ?, unit_price = ?, requisition_no = ?
+      SET batch_id = ?, quantity = ?, transaction_date = ?, counterparty = ?, note = ?, purpose = ?, unit_price = ?, requisition_no = ?
       WHERE id = ?
-    `).run(newQty, newDate, newCounterparty, newNote, newPurpose, newUnitPrice, newRequisitionNo, txn.id);
+    `).run(newBatchId, newQty, newDate, newCounterparty, newNote, newPurpose, newUnitPrice, newRequisitionNo, txn.id);
     db.exec('COMMIT');
   } catch (err) {
     db.exec('ROLLBACK');
