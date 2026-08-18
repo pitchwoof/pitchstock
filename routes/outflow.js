@@ -194,7 +194,12 @@ router.post('/convert', requireAuth, requireCreate, (req, res) => {
   const originNote = sameProduct ? `ย้ายจากล็อตเดิม: ${originLots} (วันหมดอายุเดิม: ${originExpiries})` : null;
   const inNote = originNote ? (note ? `${note} — ${originNote}` : originNote) : (note || null);
 
-  let newBatchId;
+  // When converting to a different product for a specific customer, treat it as an immediate
+  // shipment: deduct the source and note what it was converted to, but don't create destination
+  // stock that would just sit in inventory untouched — there's no "customer's copy" of a lot.
+  const skipDestBatch = !sameProduct && !!customer;
+
+  let newBatchId = null;
   db.exec('BEGIN');
   try {
     const outCounterparty = sameProduct
@@ -207,15 +212,17 @@ router.post('/convert', requireAuth, requireCreate, (req, res) => {
       updateBatch.run(batch.quantity_remaining - take, batch.id);
       insertOutTxn.run(batch.id, sourceProductId, take, cDate, outCounterparty, req.session.userId, note || null);
     }
-    const bInfo = insertBatch.run(
-      destProductId, destBatchNumber || `CONV-${sourceProduct.sku_code}-${cDate}`, inheritedExpiration,
-      qty, qty, cDate, req.session.userId,
-      note || (sameProduct
-        ? `ย้ายล็อตจาก ${originLots} (วันหมดอายุเดิม: ${originExpiries}) — แก้ไขวันหมดอายุ`
-        : `แปลงจาก ${sourceProduct.name} (${sourceProduct.sku_code})`)
-    );
-    newBatchId = Number(bInfo.lastInsertRowid);
-    insertInTxn.run(newBatchId, destProductId, qty, cDate, inCounterparty, req.session.userId, inNote);
+    if (!skipDestBatch) {
+      const bInfo = insertBatch.run(
+        destProductId, destBatchNumber || `CONV-${sourceProduct.sku_code}-${cDate}`, inheritedExpiration,
+        qty, qty, cDate, req.session.userId,
+        note || (sameProduct
+          ? `ย้ายล็อตจาก ${originLots} (วันหมดอายุเดิม: ${originExpiries}) — แก้ไขวันหมดอายุ`
+          : `แปลงจาก ${sourceProduct.name} (${sourceProduct.sku_code})`)
+      );
+      newBatchId = Number(bInfo.lastInsertRowid);
+      insertInTxn.run(newBatchId, destProductId, qty, cDate, inCounterparty, req.session.userId, inNote);
+    }
     db.exec('COMMIT');
   } catch (err) {
     db.exec('ROLLBACK');
@@ -225,6 +232,7 @@ router.post('/convert', requireAuth, requireCreate, (req, res) => {
   res.status(201).json({
     sourceAllocation: sourceAllocation.map((a) => ({ batchId: a.batch.id, batchNumber: a.batch.batch_number, taken: a.take })),
     newBatchId,
+    shippedDirectly: skipDestBatch,
   });
 });
 

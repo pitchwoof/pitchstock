@@ -1320,8 +1320,10 @@ async function renderIssue(container) {
   container.insertAdjacentHTML('beforeend', `
     <div id="issue-mode-convert" class="card hidden">
       <h3>เบิกออกแบบแปลงหมึกเป็นเบอร์อื่น</h3>
-      <p class="muted">ใช้เมื่อนำหมึกเบอร์หนึ่งไปแปลง/บรรจุใหม่เป็นอีกเบอร์หนึ่งก่อนส่งให้ลูกค้า
-        ระบบจะตัดสต็อกจากสินค้าต้นทางและสร้างล็อตใหม่ให้สินค้าปลายทางให้อัตโนมัติ</p>
+      <p class="muted">ใช้เมื่อนำหมึกเบอร์หนึ่งไปแปลง/บรรจุใหม่เป็นอีกเบอร์หนึ่งก่อนส่งให้ลูกค้า —
+        ถ้าระบุ "ลูกค้า" ระบบจะตัดสต็อกจากสินค้าต้นทางแล้วถือว่าส่งให้ลูกค้าทันที
+        (ไม่สร้างล็อต/สต็อกค้างในสินค้าปลายทาง) แต่ถ้าไม่ระบุลูกค้า (แปลงเก็บไว้ในคลังก่อน)
+        ระบบจะสร้างล็อตใหม่ให้สินค้าปลายทางตามปกติ</p>
       <form id="conv-form" class="stack">
         <div class="form-row">
           <label class="field">ซัพพลายเออร์ต้นทาง
@@ -1445,7 +1447,7 @@ async function renderIssue(container) {
       return;
     }
     try {
-      await api('POST', '/api/outflow/convert', {
+      const result = await api('POST', '/api/outflow/convert', {
         sourceProductId: Number(document.getElementById('cv-source-product').value),
         sourceBatchId: document.getElementById('cv-source-batch').value || null,
         quantity: Number(document.getElementById('cv-qty').value),
@@ -1456,7 +1458,9 @@ async function renderIssue(container) {
         note: document.getElementById('cv-note').value || null,
         customer: customerValue || null,
       });
-      msg.innerHTML = '<p class="msg success">แปลงหมึกเรียบร้อยแล้ว</p>';
+      msg.innerHTML = result.shippedDirectly
+        ? '<p class="msg success">แปลงหมึกและส่งให้ลูกค้าเรียบร้อยแล้ว (ตัดสต็อกจากสินค้าต้นทางโดยตรง ไม่มีสต็อกค้างในสินค้าปลายทาง)</p>'
+        : '<p class="msg success">แปลงหมึกเรียบร้อยแล้ว</p>';
       e.target.reset();
       document.getElementById('cv-date').value = new Date().toISOString().slice(0, 10);
       document.getElementById('cv-new-customer-row').classList.add('hidden');
