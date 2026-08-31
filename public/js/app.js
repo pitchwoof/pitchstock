@@ -558,6 +558,23 @@ const FORECAST_STATUS = {
   ok: { badge: 'ok', label: 'ปกติ' },
 };
 
+// Same ordering convention as groupByBrand (Domino/General/Weber/Rynan first, then the rest
+// alphabetically) — kept separate since forecast rows carry supplierName, not brand.
+function groupForecastBySupplier(products) {
+  const groups = new Map();
+  for (const p of products) {
+    const key = p.supplierName || 'อื่นๆ';
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(p);
+  }
+  const ordered = [];
+  for (const b of BRAND_ORDER) {
+    if (groups.has(b)) { ordered.push([b, groups.get(b)]); groups.delete(b); }
+  }
+  const rest = [...groups.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+  return [...ordered, ...rest];
+}
+
 function buildForecastTableHTML(products) {
   const rows = products.map((p) => {
     const st = FORECAST_STATUS[p.status] || FORECAST_STATUS.ok;
@@ -567,15 +584,16 @@ function buildForecastTableHTML(products) {
     const onOrderCell = p.onOrderQty > 0
       ? `${fmtNum(p.onOrderQty)} ${escapeHtml(p.unit)}<br><span class="muted">คาดว่าจะถึง ${fmtDate(p.nextExpectedDate)}</span>`
       : '<span class="muted">—</span>';
-    const shiftLabel = p.usageShiftPct === null ? 'ดีมานด์ใหม่' : `${p.usageShiftPct >= 0 ? '+' : ''}${Math.round(p.usageShiftPct * 100)}%`;
-    const shiftNote = p.usageShift
-      ? `<br><span class="badge ${p.usageShift === 'up' ? 'warning' : 'none'}" title="เทียบยอดใช้ 30 วันล่าสุดกับ 30 วันก่อนหน้า — สัญญาณว่าดีมานด์เปลี่ยน ควรทบทวน safety stock ของสินค้านี้">${p.usageShift === 'up' ? '▲' : '▼'} ${shiftLabel}</span>`
-      : '';
+    const shiftLabel = p.usageShiftPct === null ? 'เริ่มมีการใช้' : `${p.usageShiftPct >= 0 ? '+' : ''}${Math.round(p.usageShiftPct * 100)}%`;
+    const shiftCell = p.usageShift
+      ? `<span class="badge ${p.usageShift === 'up' ? 'warning' : 'none'}" title="เทียบยอดใช้ 30 วันล่าสุดกับ 30 วันก่อนหน้า — สัญญาณว่าดีมานด์เปลี่ยน ควรทบทวน safety stock ของสินค้านี้">${p.usageShift === 'up' ? '▲' : '▼'} ${shiftLabel}</span>`
+      : '<span class="muted">—</span>';
     return `
       <tr>
         <td><strong>${escapeHtml(p.name)}</strong><br><span class="muted">${escapeHtml(p.skuCode)}</span></td>
         <td>${escapeHtml(p.supplierName || '—')}</td>
-        <td class="right">${fmtNum(p.avgMonthlyUsage)} ${escapeHtml(p.unit)}${p.usageSource === 'estimated' ? ' <span class="muted">(ประมาณ)</span>' : ''}${shiftNote}</td>
+        <td class="right">${fmtNum(p.avgMonthlyUsage)} ${escapeHtml(p.unit)}${p.usageSource === 'estimated' ? ' <span class="muted">(ประมาณ)</span>' : ''}</td>
+        <td>${shiftCell}</td>
         <td class="right">${fmtNum(p.safetyStock)} ${escapeHtml(p.unit)}</td>
         <td class="right">${fmtNum(p.leadTimeDemand)} ${escapeHtml(p.unit)}<br><span class="muted">${p.leadTimeDays} วัน</span></td>
         <td class="right">${fmtNum(p.onHandTotal)} ${escapeHtml(p.unit)}${expiredNote}</td>
@@ -591,12 +609,13 @@ function buildForecastTableHTML(products) {
         <thead>
           <tr>
             <th>สินค้า</th><th>ซัพพลายเออร์</th><th class="right">ใช้เฉลี่ย/เดือน</th>
+            <th>ดีมานด์เปลี่ยนแปลง</th>
             <th class="right">Safety stock (เป้าสต็อก)</th><th class="right">ปริมาณที่จะใช้ระหว่างรอของมาส่ง<br><span class="muted" style="font-weight:400;text-transform:none;letter-spacing:0">(ระยะเวลาส่งของ × อัตราการใช้เฉลี่ย)</span></th>
             <th class="right">คงเหลือทั้งหมด</th><th class="right">สั่งซื้อไปแล้ว (กำลังมา)</th>
             <th class="right">แนะนำสั่งซื้อ</th><th>สถานะ</th>
           </tr>
         </thead>
-        <tbody>${rows || '<tr><td colspan="9" class="muted">ไม่มีสินค้าให้พยากรณ์</td></tr>'}</tbody>
+        <tbody>${rows || '<tr><td colspan="10" class="muted">ไม่มีสินค้าให้พยากรณ์</td></tr>'}</tbody>
       </table>
     </div>`;
 }
@@ -653,20 +672,18 @@ async function renderDashboard(container) {
       </div>
       <div id="trend-body" style="position:relative"><p class="muted">กำลังโหลด…</p></div>
     </div>
-    <div class="card">
-      <div class="chart-header">
-        <h3>พยากรณ์การสั่งซื้อ</h3>
-        <div class="chart-controls">
-          <select id="forecast-supplier">
-            <option value="">ซัพพลายเออร์ทั้งหมด</option>
-            ${brands.map((b) => `<option value="${escapeHtml(b)}">${escapeHtml(b)}</option>`).join('')}
-          </select>
-        </div>
+    <div class="chart-header">
+      <h3>พยากรณ์การสั่งซื้อ</h3>
+      <div class="chart-controls">
+        <select id="forecast-supplier">
+          <option value="">ซัพพลายเออร์ทั้งหมด</option>
+          ${brands.map((b) => `<option value="${escapeHtml(b)}">${escapeHtml(b)}</option>`).join('')}
+        </select>
       </div>
-      <p class="muted">แนะนำสั่งซื้อ = เติมสต็อกให้ถึง safety stock (จุดสั่งซื้อ) บวกปริมาณที่จะใช้ระหว่างรอของมาส่ง (ระยะเวลาส่งของ × อัตราการใช้เฉลี่ย) หักด้วยยอดคงเหลือทั้งหมดและยอดที่สั่งซื้อไปแล้วแต่ยังไม่เข้าคลัง ตั้งค่าจุดสั่งซื้อและระยะเวลาส่งของแต่ละสินค้าได้ที่หน้า "สินค้า" เพื่อความแม่นยำ</p>
-      <div class="stat-row" id="forecast-stats"></div>
-      <div id="forecast-body"><p class="muted">กำลังโหลด…</p></div>
     </div>
+    <p class="muted">แนะนำสั่งซื้อ = เติมสต็อกให้ถึง safety stock (จุดสั่งซื้อ) บวกปริมาณที่จะใช้ระหว่างรอของมาส่ง (ระยะเวลาส่งของ × อัตราการใช้เฉลี่ย) หักด้วยยอดคงเหลือทั้งหมดและยอดที่สั่งซื้อไปแล้วแต่ยังไม่เข้าคลัง ตั้งค่าจุดสั่งซื้อและระยะเวลาส่งของแต่ละสินค้าได้ที่หน้า "สินค้า" เพื่อความแม่นยำ — ตารางด้านล่างแยกตามซัพพลายเออร์</p>
+    <div class="stat-row" id="forecast-stats"></div>
+    <div id="forecast-body"><p class="muted">กำลังโหลด…</p></div>
     <div class="card">
       <h3>การแจ้งเตือน</h3>
       <div class="table-wrap"><table><thead><tr><th>ประเภท</th><th>สินค้า</th><th>รายละเอียด</th></tr></thead>
@@ -731,7 +748,12 @@ async function renderDashboard(container) {
     const filtered = supplierFilter
       ? forecast.products.filter((p) => p.supplierName === supplierFilter)
       : forecast.products;
-    document.getElementById('forecast-body').innerHTML = buildForecastTableHTML(filtered);
+    const sections = groupForecastBySupplier(filtered).map(([supplier, group]) => `
+      <div class="card">
+        <h3>${escapeHtml(supplier)} <span class="muted" style="font-weight:400;font-size:13px">(${group.length} SKU)</span></h3>
+        ${buildForecastTableHTML(group)}
+      </div>`).join('');
+    document.getElementById('forecast-body').innerHTML = sections || '<div class="card"><p class="muted">ไม่มีสินค้าให้พยากรณ์</p></div>';
   }
 
   document.getElementById('forecast-supplier').addEventListener('change', renderForecastTable);
