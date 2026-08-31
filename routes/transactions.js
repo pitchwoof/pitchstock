@@ -4,20 +4,29 @@ const { requireAuth, requireEdit } = require('../middleware/auth');
 
 const router = express.Router();
 
-function buildQuery({ productId, type, from, to, purpose }) {
+function buildQuery({ productId, type, from, to, purpose, customer, salesperson }) {
   const clauses = [];
   const params = [];
+  const joins = [];
   if (productId) { clauses.push('t.product_id = ?'); params.push(productId); }
   if (type) { clauses.push('t.type = ?'); params.push(type); }
   if (from) { clauses.push('t.transaction_date >= ?'); params.push(from); }
   if (to) { clauses.push('t.transaction_date <= ?'); params.push(to); }
   if (purpose) { clauses.push("COALESCE(t.purpose, 'sale') = ?"); params.push(purpose); }
+  if (customer) { clauses.push('t.counterparty = ?'); params.push(customer); }
+  if (salesperson) {
+    // counterparty is freeform text (not an FK), so matching to a salesperson goes through
+    // the customers table by name — only customer records carry "assigned_to".
+    joins.push('JOIN customers cust ON cust.name = t.counterparty');
+    clauses.push('cust.assigned_to = ?');
+    params.push(salesperson);
+  }
   const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
-  return { where, params };
+  return { where, params, join: joins.join(' ') };
 }
 
 router.get('/', requireAuth, (req, res) => {
-  const { where, params } = buildQuery(req.query);
+  const { where, params, join } = buildQuery(req.query);
   const limit = Math.min(Number(req.query.limit) || 200, 1000);
   const rows = db.prepare(`
     SELECT t.*, p.name AS product_name, p.sku_code, p.unit, b.batch_number, b.expiration_date, u.display_name AS user_name
@@ -25,6 +34,7 @@ router.get('/', requireAuth, (req, res) => {
     JOIN products p ON p.id = t.product_id
     JOIN batches b ON b.id = t.batch_id
     LEFT JOIN users u ON u.id = t.user_id
+    ${join}
     ${where}
     ORDER BY t.transaction_date DESC, t.created_at DESC
     LIMIT ?
@@ -132,7 +142,7 @@ router.delete('/:id', requireAuth, requireEdit, (req, res) => {
 
 router.get('/export.csv', requireAuth, (req, res) => {
   const isAdmin = req.session.role === 'admin';
-  const { where, params } = buildQuery(req.query);
+  const { where, params, join } = buildQuery(req.query);
   const rows = db.prepare(`
     SELECT t.transaction_date, t.type, t.purpose, p.sku_code, p.name AS product_name, b.batch_number, b.expiration_date,
            t.quantity, p.unit, t.counterparty, u.display_name AS user_name, t.note, t.unit_price, t.requisition_no
@@ -140,6 +150,7 @@ router.get('/export.csv', requireAuth, (req, res) => {
     JOIN products p ON p.id = t.product_id
     JOIN batches b ON b.id = t.batch_id
     LEFT JOIN users u ON u.id = t.user_id
+    ${join}
     ${where}
     ORDER BY t.transaction_date DESC, t.created_at DESC
   `).all(...params);

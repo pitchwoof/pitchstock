@@ -112,6 +112,17 @@ CREATE TABLE IF NOT EXISTS purchase_orders (
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS demand_estimates (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  product_id INTEGER NOT NULL REFERENCES products(id),
+  customer_name TEXT NOT NULL,
+  predicted_monthly_usage REAL NOT NULL,
+  note TEXT,
+  created_by INTEGER REFERENCES users(id),
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE INDEX IF NOT EXISTS idx_batches_product ON batches(product_id);
 CREATE INDEX IF NOT EXISTS idx_batches_expiration ON batches(expiration_date);
 CREATE INDEX IF NOT EXISTS idx_txn_product ON stock_transactions(product_id);
@@ -121,6 +132,7 @@ CREATE INDEX IF NOT EXISTS idx_claims_status ON claims(status);
 CREATE INDEX IF NOT EXISTS idx_customers_assigned ON customers(assigned_user_id);
 CREATE INDEX IF NOT EXISTS idx_po_product ON purchase_orders(product_id);
 CREATE INDEX IF NOT EXISTS idx_po_status ON purchase_orders(status);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_demand_estimates_product_customer ON demand_estimates(product_id, customer_name);
 `);
 
 // Lightweight migrations: add columns that may not exist on a database created before this feature.

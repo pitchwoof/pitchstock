@@ -136,6 +136,7 @@ const routes = {
   history: renderHistory,
   claims: renderClaims,
   products: renderProducts,
+  'demand-planning': renderDemandPlanning,
   customers: renderCustomers,
   users: renderUsers,
   account: renderAccount,
@@ -147,6 +148,7 @@ function route() {
   document.querySelectorAll('.nav a').forEach((a) => {
     a.classList.toggle('active', a.dataset.view === viewName);
   });
+  closeMobileNav();
   const container = document.getElementById('view');
   const fn = routes[viewName] || renderDashboard;
   container.innerHTML = '<p class="muted">กำลังโหลด…</p>';
@@ -155,6 +157,17 @@ function route() {
   });
 }
 window.addEventListener('hashchange', route);
+
+// ---------- Mobile nav toggle ----------
+function closeMobileNav() {
+  document.getElementById('nav').classList.remove('open');
+  document.getElementById('nav-toggle').setAttribute('aria-expanded', 'false');
+}
+document.getElementById('nav-toggle').addEventListener('click', () => {
+  const nav = document.getElementById('nav');
+  const open = nav.classList.toggle('open');
+  document.getElementById('nav-toggle').setAttribute('aria-expanded', String(open));
+});
 
 // ---------- Helpers ----------
 function escapeHtml(s) {
@@ -453,7 +466,7 @@ async function loadCustomers() {
 // input (id="X-search") and a dropdown list (id="X-list") already present in the markup.
 // Keeps using select.value / select.innerHTML / 'change' events everywhere else in the app —
 // call select._syncSearchable() after any code sets select.value or rebuilds its options directly.
-function wireSearchableSelect(selectId, { newNameInputId } = {}) {
+function wireSearchableSelect(selectId, { newNameInputId, includeEmptyOption } = {}) {
   const select = document.getElementById(selectId);
   const input = document.getElementById(`${selectId}-search`);
   const list = document.getElementById(`${selectId}-list`);
@@ -485,13 +498,15 @@ function wireSearchableSelect(selectId, { newNameInputId } = {}) {
   }
   function renderList(filter) {
     const q = filter.trim().toLowerCase();
+    const emptyOpt = includeEmptyOption ? optionsData().find((o) => o.value === '') : null;
     const all = optionsData().filter((o) => o.value !== '');
     const addNew = all.find((o) => o.value === '__new__');
     const regular = all.filter((o) => o.value !== '__new__');
     const matched = q ? regular.filter((o) => o.label.toLowerCase().includes(q)) : regular;
+    const emptyRow = emptyOpt ? `<div class="ss-item" data-value="">${escapeHtml(emptyOpt.label)}</div>` : '';
     const rows = matched.map((o) => `<div class="ss-item" data-value="${escapeHtml(o.value)}">${escapeHtml(o.label)}</div>`).join('');
     const addRow = addNew ? `<div class="ss-item ss-item-add" data-value="${escapeHtml(addNew.value)}">${escapeHtml(addNew.label)}</div>` : '';
-    list.innerHTML = rows || addRow ? rows + addRow : '<div class="ss-item muted">ไม่พบรายการที่ตรงกัน</div>';
+    list.innerHTML = emptyRow + rows || addRow ? emptyRow + rows + addRow : '<div class="ss-item muted">ไม่พบรายการที่ตรงกัน</div>';
     activeIndex = -1;
     list.classList.remove('hidden');
     list.querySelectorAll('.ss-item[data-value]').forEach((el) => {
@@ -546,17 +561,25 @@ const FORECAST_STATUS = {
 function buildForecastTableHTML(products) {
   const rows = products.map((p) => {
     const st = FORECAST_STATUS[p.status] || FORECAST_STATUS.ok;
-    const wasteNote = p.projectedWaste > 0
-      ? `<br><span class="muted" style="color:var(--warning)">${fmtNum(p.projectedWaste)} ${escapeHtml(p.unit)} เสี่ยงหมดอายุก่อนใช้</span>`
+    const expiredNote = p.expiredQty > 0
+      ? `<br><span class="muted" style="color:var(--danger)">หมดอายุแล้ว ${fmtNum(p.expiredQty)} ${escapeHtml(p.unit)}</span>`
+      : '';
+    const onOrderCell = p.onOrderQty > 0
+      ? `${fmtNum(p.onOrderQty)} ${escapeHtml(p.unit)}<br><span class="muted">คาดว่าจะถึง ${fmtDate(p.nextExpectedDate)}</span>`
+      : '<span class="muted">—</span>';
+    const shiftLabel = p.usageShiftPct === null ? 'ดีมานด์ใหม่' : `${p.usageShiftPct >= 0 ? '+' : ''}${Math.round(p.usageShiftPct * 100)}%`;
+    const shiftNote = p.usageShift
+      ? `<br><span class="badge ${p.usageShift === 'up' ? 'warning' : 'none'}" title="เทียบยอดใช้ 30 วันล่าสุดกับ 30 วันก่อนหน้า — สัญญาณว่าดีมานด์เปลี่ยน ควรทบทวน safety stock ของสินค้านี้">${p.usageShift === 'up' ? '▲' : '▼'} ${shiftLabel}</span>`
       : '';
     return `
       <tr>
         <td><strong>${escapeHtml(p.name)}</strong><br><span class="muted">${escapeHtml(p.skuCode)}</span></td>
         <td>${escapeHtml(p.supplierName || '—')}</td>
-        <td class="right">${fmtNum(p.avgMonthlyUsage)} ${escapeHtml(p.unit)}${p.usageSource === 'estimated' ? ' <span class="muted">(ประมาณ)</span>' : ''}</td>
-        <td class="right">${fmtNum(p.usableStock)} ${escapeHtml(p.unit)}${wasteNote}</td>
-        <td class="right">${p.daysOfCover === null ? '—' : `${Math.round(p.daysOfCover)} วัน`}</td>
-        <td class="right">${p.leadTimeDays} วัน</td>
+        <td class="right">${fmtNum(p.avgMonthlyUsage)} ${escapeHtml(p.unit)}${p.usageSource === 'estimated' ? ' <span class="muted">(ประมาณ)</span>' : ''}${shiftNote}</td>
+        <td class="right">${fmtNum(p.safetyStock)} ${escapeHtml(p.unit)}</td>
+        <td class="right">${fmtNum(p.leadTimeDemand)} ${escapeHtml(p.unit)}<br><span class="muted">${p.leadTimeDays} วัน</span></td>
+        <td class="right">${fmtNum(p.onHandTotal)} ${escapeHtml(p.unit)}${expiredNote}</td>
+        <td class="right">${onOrderCell}</td>
         <td class="right"><strong>${fmtNum(p.suggestedOrderQty)} ${escapeHtml(p.unit)}</strong></td>
         <td><span class="badge ${st.badge}">${st.label}</span></td>
       </tr>`;
@@ -568,11 +591,12 @@ function buildForecastTableHTML(products) {
         <thead>
           <tr>
             <th>สินค้า</th><th>ซัพพลายเออร์</th><th class="right">ใช้เฉลี่ย/เดือน</th>
-            <th class="right">คงเหลือที่ใช้ได้</th><th class="right">จำนวนวันที่ใช้ได้</th>
-            <th class="right">ระยะเวลาส่งของ</th><th class="right">แนะนำสั่งซื้อ</th><th>สถานะ</th>
+            <th class="right">Safety stock (เป้าสต็อก)</th><th class="right">ปริมาณที่จะใช้ระหว่างรอของมาส่ง<br><span class="muted" style="font-weight:400;text-transform:none;letter-spacing:0">(ระยะเวลาส่งของ × อัตราการใช้เฉลี่ย)</span></th>
+            <th class="right">คงเหลือทั้งหมด</th><th class="right">สั่งซื้อไปแล้ว (กำลังมา)</th>
+            <th class="right">แนะนำสั่งซื้อ</th><th>สถานะ</th>
           </tr>
         </thead>
-        <tbody>${rows || '<tr><td colspan="8" class="muted">ไม่มีสินค้าให้พยากรณ์</td></tr>'}</tbody>
+        <tbody>${rows || '<tr><td colspan="9" class="muted">ไม่มีสินค้าให้พยากรณ์</td></tr>'}</tbody>
       </table>
     </div>`;
 }
@@ -639,7 +663,7 @@ async function renderDashboard(container) {
           </select>
         </div>
       </div>
-      <p class="muted">ปริมาณที่แนะนำให้สั่งซื้อเพิ่มในเดือนนี้ คำนวณจากอัตราการใช้ล่าสุด วันหมดอายุของสต็อกปัจจุบัน และระยะเวลาส่งของ ตั้งค่าจุดสั่งซื้อและระยะเวลาส่งของแต่ละสินค้าได้ที่หน้า "สินค้า" เพื่อความแม่นยำ</p>
+      <p class="muted">แนะนำสั่งซื้อ = เติมสต็อกให้ถึง safety stock (จุดสั่งซื้อ) บวกปริมาณที่จะใช้ระหว่างรอของมาส่ง (ระยะเวลาส่งของ × อัตราการใช้เฉลี่ย) หักด้วยยอดคงเหลือทั้งหมดและยอดที่สั่งซื้อไปแล้วแต่ยังไม่เข้าคลัง ตั้งค่าจุดสั่งซื้อและระยะเวลาส่งของแต่ละสินค้าได้ที่หน้า "สินค้า" เพื่อความแม่นยำ</p>
       <div class="stat-row" id="forecast-stats"></div>
       <div id="forecast-body"><p class="muted">กำลังโหลด…</p></div>
     </div>
@@ -698,7 +722,8 @@ async function renderDashboard(container) {
   document.getElementById('forecast-stats').innerHTML = `
     <div class="stat-tile ${forecast.summary.urgentCount ? 'danger' : ''}"><div class="num">${forecast.summary.urgentCount}</div><div class="label">ด่วน — ต้องสั่งซื้อทันที</div></div>
     <div class="stat-tile ${forecast.summary.orderSoonCount ? 'warning' : ''}"><div class="num">${forecast.summary.orderSoonCount}</div><div class="label">ควรสั่งซื้อเร็วๆ นี้</div></div>
-    <div class="stat-tile ${forecast.summary.wasteRiskCount ? 'warning' : ''}"><div class="num">${forecast.summary.wasteRiskCount}</div><div class="label">เสี่ยงสูญเปล่า (จะหมดอายุก่อนใช้)</div></div>
+    <div class="stat-tile ${forecast.summary.expiredCount ? 'warning' : ''}"><div class="num">${forecast.summary.expiredCount}</div><div class="label">มีสต็อกหมดอายุค้างอยู่</div></div>
+    <div class="stat-tile ${forecast.summary.shiftCount ? 'warning' : ''}"><div class="num">${forecast.summary.shiftCount}</div><div class="label">ดีมานด์เปลี่ยนกะทันหัน — ควรทบทวน safety stock</div></div>
   `;
 
   function renderForecastTable() {
@@ -1474,6 +1499,9 @@ async function renderIssue(container) {
 
 // ---------- History ----------
 async function renderHistory(container) {
+  await loadCustomers();
+  const salespeople = [...new Set(state.customers.map((c) => c.assigned_to).filter(Boolean))].sort();
+
   container.innerHTML = `
     <h2>ประวัติการเคลื่อนไหว</h2>
     <div class="card">
@@ -1501,6 +1529,19 @@ async function renderHistory(container) {
             <option value="gift">แถมให้ลูกค้า</option>
           </select>
         </label>
+        <label class="field">ลูกค้า
+          <div class="searchable-select">
+            <input type="text" class="ss-input" id="hf-customer-search" placeholder="พิมพ์เพื่อค้นหาลูกค้า..." autocomplete="off">
+            <div class="ss-list hidden" id="hf-customer-list"></div>
+            <select id="hf-customer" class="hidden">
+              <option value="">ทั้งหมด</option>
+              ${customerOptions(state.customers)}
+            </select>
+          </div>
+        </label>
+        <label class="field">พนักงานขายที่ดูแล
+          <select id="hf-salesperson"><option value="">ทั้งหมด</option>${salespeople.map((s) => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`).join('')}</select>
+        </label>
         <label class="field">จาก <input type="date" id="hf-from"></label>
         <label class="field">ถึง <input type="date" id="hf-to"></label>
         <button id="hf-apply" class="secondary">กรอง</button>
@@ -1515,11 +1556,15 @@ async function renderHistory(container) {
     const productId = document.getElementById('hf-product').value;
     const type = document.getElementById('hf-type').value;
     const purpose = document.getElementById('hf-purpose').value;
+    const customer = document.getElementById('hf-customer').value;
+    const salesperson = document.getElementById('hf-salesperson').value;
     const from = document.getElementById('hf-from').value;
     const to = document.getElementById('hf-to').value;
     if (productId) params.set('productId', productId);
     if (type) params.set('type', type);
     if (purpose) params.set('purpose', purpose);
+    if (customer) params.set('customer', customer);
+    if (salesperson) params.set('salesperson', salesperson);
     if (from) params.set('from', from);
     if (to) params.set('to', to);
     return params.toString();
@@ -1701,6 +1746,7 @@ async function renderHistory(container) {
     state.products,
     { includeAllProducts: true }
   );
+  wireSearchableSelect('hf-customer', { includeEmptyOption: true });
 
   await load();
 }
@@ -2106,23 +2152,52 @@ async function renderOrders(container) {
 }
 
 // ---------- Products ----------
+// Domino/General/Rynan/Weber always appear even with zero current SKUs (they're the standing
+// distributor list); anything else found on real products is appended alphabetically after.
+function orderedBrandList(products) {
+  const known = new Set([...BRAND_ORDER, ...products.map((p) => p.brand).filter(Boolean)]);
+  const ordered = BRAND_ORDER.filter((b) => known.has(b));
+  const rest = [...known].filter((b) => !BRAND_ORDER.includes(b)).sort();
+  return [...ordered, ...rest];
+}
+
 async function renderProducts(container) {
   const products = await api('GET', '/api/products?includeArchived=1');
   const editable = canEdit();
-  const rows = products.map((p) => `
+  const brands = orderedBrandList(products);
+  const brandRowOptionsHTML = (selected) => brands.map((b) => `<option value="${escapeHtml(b)}" ${b === selected ? 'selected' : ''}>${escapeHtml(b)}</option>`).join('');
+
+  function buildRow(p) {
+    return `
     <tr>
       <td>${editable ? `<input type="text" class="pf-sku" data-id="${p.id}" value="${escapeHtml(p.sku_code)}" style="min-width:110px">` : escapeHtml(p.sku_code)}</td>
       <td>${editable ? `<input type="text" class="pf-name" data-id="${p.id}" value="${escapeHtml(p.name)}" style="min-width:160px">` : escapeHtml(p.name)}</td>
-      <td>${editable ? `<input type="text" class="pf-brand" data-id="${p.id}" value="${escapeHtml(p.brand || '')}" style="min-width:100px">` : escapeHtml(p.brand || '')}</td>
+      <td>${editable ? `<select class="pf-row-brand" data-id="${p.id}" style="min-width:110px"><option value="">— ไม่ระบุ —</option>${brandRowOptionsHTML(p.brand)}</select>` : escapeHtml(p.brand || '')}</td>
       <td>${editable ? `<input type="text" class="pf-unit" data-id="${p.id}" value="${escapeHtml(p.unit)}" style="width:70px">` : escapeHtml(p.unit)}</td>
-      <td data-requires="edit"><input type="number" class="pf-reorder-level" data-id="${p.id}" value="${p.reorder_level}" step="any" min="0" style="width:80px"></td>
+      <td data-requires="edit">
+        <input type="number" class="pf-reorder-level" data-id="${p.id}" value="${p.reorder_level}" step="any" min="0" style="width:80px">
+        <br><a href="#/demand-planning?productId=${p.id}" style="font-size:12px">ดูลูกค้า →</a>
+      </td>
       <td data-requires="edit"><input type="number" class="pf-leadtime" data-id="${p.id}" value="${p.lead_time_days}" min="0" style="width:70px"></td>
       <td>${p.archived ? '<span class="badge low">เก็บถาวร</span>' : '<span class="badge ok">ใช้งานอยู่</span>'}</td>
       <td style="white-space:nowrap">${editable ? `
         <button class="secondary toggle-archive" data-id="${p.id}" data-archived="${p.archived}">${p.archived ? 'เลิกเก็บถาวร' : 'เก็บถาวร'}</button>
         <button type="button" class="secondary pf-delete-btn" data-id="${p.id}" data-name="${escapeHtml(p.name)}">ลบ</button>
       ` : ''}</td>
-    </tr>`).join('');
+    </tr>`;
+  }
+
+  const THEAD = '<thead><tr><th>รหัส SKU</th><th>ชื่อ</th><th>ซัพพลายเออร์</th><th>หน่วย</th><th>จุดสั่งซื้อ</th><th>ระยะเวลาส่งของ (วัน)</th><th>สถานะ</th><th></th></tr></thead>';
+  const sections = groupByBrand(products).map(([brand, group]) => `
+    <div class="card">
+      <h3>${escapeHtml(brand)} <span class="muted" style="font-weight:400;font-size:13px">(${group.length} SKU)</span></h3>
+      <div class="table-wrap">
+        <table>
+          ${THEAD}
+          <tbody>${group.map(buildRow).join('')}</tbody>
+        </table>
+      </div>
+    </div>`).join('');
 
   container.innerHTML = `
     <h2>สินค้า</h2>
@@ -2134,8 +2209,21 @@ async function renderProducts(container) {
           <label class="field">ชื่อ <input type="text" id="pf-name" required></label>
         </div>
         <div class="form-row">
-          <label class="field">ซัพพลายเออร์ <input type="text" id="pf-brand" placeholder="เช่น UIPS, Domino"></label>
+          <label class="field">ซัพพลายเออร์
+            <div class="searchable-select">
+              <input type="text" class="ss-input" id="pf-brand-search" placeholder="เลือกซัพพลายเออร์" autocomplete="off">
+              <div class="ss-list hidden" id="pf-brand-list"></div>
+              <select id="pf-brand" class="hidden">
+                <option value="">— ไม่ระบุ —</option>
+                ${brandRowOptionsHTML(null)}
+                <option value="__new__">+ เพิ่มซัพพลายเออร์ใหม่…</option>
+              </select>
+            </div>
+          </label>
           <label class="field">หน่วย <input type="text" id="pf-unit" value="ตลับ"></label>
+        </div>
+        <div class="form-row hidden" id="pf-new-brand-row">
+          <label class="field">ชื่อซัพพลายเออร์ใหม่ <input type="text" id="pf-new-brand-name"></label>
         </div>
         <div class="form-row">
           <label class="field">จุดสั่งซื้อ <input type="number" id="pf-reorder" step="any" value="0"></label>
@@ -2145,16 +2233,21 @@ async function renderProducts(container) {
         <div id="pf-msg"></div>
       </form>
     </div>
-    <div class="card">
-      <p class="muted">จุดสั่งซื้อและระยะเวลาส่งของจะถูกใช้ในการพยากรณ์การสั่งซื้อที่แดชบอร์ด — การแก้ไขจะถูกบันทึกอัตโนมัติ</p>
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th>รหัส SKU</th><th>ชื่อ</th><th>ซัพพลายเออร์</th><th>หน่วย</th><th>จุดสั่งซื้อ</th><th>ระยะเวลาส่งของ (วัน)</th><th>สถานะ</th><th></th></tr></thead>
-          <tbody>${rows || '<tr><td colspan="8" class="muted">ยังไม่มีสินค้า</td></tr>'}</tbody>
-        </table>
-      </div>
-    </div>
+    <p class="muted">จุดสั่งซื้อและระยะเวลาส่งของจะถูกใช้ในการพยากรณ์การสั่งซื้อที่แดชบอร์ด — การแก้ไขจะถูกบันทึกอัตโนมัติ — ตารางด้านล่างแยกตามซัพพลายเออร์</p>
+    ${sections || '<div class="card"><p class="muted">ยังไม่มีสินค้า</p></div>'}
   `;
+
+  wireSearchableSelect('pf-brand', { newNameInputId: 'pf-new-brand-name' });
+  document.getElementById('pf-brand').addEventListener('change', (e) => {
+    document.getElementById('pf-new-brand-row').classList.toggle('hidden', e.target.value !== '__new__');
+    if (e.target.value === '__new__') document.getElementById('pf-new-brand-name').focus();
+  });
+
+  function resolveNewProductBrand() {
+    const sel = document.getElementById('pf-brand').value;
+    if (sel === '__new__') return document.getElementById('pf-new-brand-name').value.trim() || null;
+    return sel || null;
+  }
 
   document.getElementById('pf-form').addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -2164,7 +2257,7 @@ async function renderProducts(container) {
       await api('POST', '/api/products', {
         skuCode: document.getElementById('pf-sku').value.trim(),
         name: document.getElementById('pf-name').value.trim(),
-        brand: document.getElementById('pf-brand').value || null,
+        brand: resolveNewProductBrand(),
         unit: document.getElementById('pf-unit').value || 'unit',
         reorderLevel: Number(document.getElementById('pf-reorder').value) || 0,
         leadTimeDays: Number(document.getElementById('pf-leadtime').value) || 30,
@@ -2205,8 +2298,23 @@ async function renderProducts(container) {
     });
   });
 
-  const PF_FIELD_BY_CLASS = { 'pf-sku': 'skuCode', 'pf-name': 'name', 'pf-brand': 'brand', 'pf-unit': 'unit' };
-  container.querySelectorAll('.pf-sku, .pf-name, .pf-brand, .pf-unit').forEach((input) => {
+  // Brand determines which section a row lives in, so re-render the whole page on change
+  // (unlike sku/name/unit below, which can just keep whatever the input already shows).
+  container.querySelectorAll('.pf-row-brand').forEach((select) => {
+    select.addEventListener('change', async () => {
+      try {
+        await api('PUT', `/api/products/${select.dataset.id}`, { brand: select.value || null });
+        await loadProducts();
+        route();
+      } catch (err) {
+        alert(err.message);
+        route();
+      }
+    });
+  });
+
+  const PF_FIELD_BY_CLASS = { 'pf-sku': 'skuCode', 'pf-name': 'name', 'pf-unit': 'unit' };
+  container.querySelectorAll('.pf-sku, .pf-name, .pf-unit').forEach((input) => {
     input.addEventListener('change', async () => {
       const field = PF_FIELD_BY_CLASS[[...input.classList].find((c) => PF_FIELD_BY_CLASS[c])];
       try {
@@ -2233,6 +2341,166 @@ async function renderProducts(container) {
   });
 
   applyPermissionGates(container);
+}
+
+// ---------- Safety stock / demand planning ----------
+// Per-product worksheet: which customers are driving a product's usage, at what rate, so staff
+// can see the "why" behind safety stock instead of guessing a single number — see conversation
+// re: painpoints when a customer switches SKU or a new customer starts buying.
+async function renderDemandPlanning(container) {
+  await loadCustomers();
+  const preselectId = getHashQuery().get('productId') || '';
+
+  container.innerHTML = `
+    <h2>คำนวณ Safety Stock</h2>
+    <div class="card">
+      <div class="filters">
+        <label class="field">สินค้า
+          <select id="dp-product"><option value="">— เลือกสินค้า —</option>${productOptions(state.products)}</select>
+        </label>
+      </div>
+      <div id="dp-body"><p class="muted">เลือกสินค้าเพื่อดูรายละเอียดลูกค้าและอัตราการใช้</p></div>
+    </div>
+  `;
+
+  const productSelect = document.getElementById('dp-product');
+  if (preselectId) productSelect.value = preselectId;
+  productSelect.addEventListener('change', loadWorksheet);
+  if (preselectId) await loadWorksheet();
+
+  async function loadWorksheet() {
+    const productId = productSelect.value;
+    const body = document.getElementById('dp-body');
+    if (!productId) { body.innerHTML = '<p class="muted">เลือกสินค้าเพื่อดูรายละเอียดลูกค้าและอัตราการใช้</p>'; return; }
+    body.innerHTML = '<p class="muted">กำลังโหลด…</p>';
+    try {
+      const data = await api('GET', `/api/demand/${productId}`);
+      renderWorksheet(body, data);
+    } catch (err) {
+      body.innerHTML = `<p class="msg error">${escapeHtml(err.message)}</p>`;
+    }
+  }
+
+  function renderWorksheet(body, data) {
+    const { product, rows, totalMonthlyUsage } = data;
+    const rowsHtml = rows.map((r) => `
+      <tr>
+        <td>${escapeHtml(r.customerName)}${r.assignedTo ? `<br><span class="muted">พนักงานขาย: ${escapeHtml(r.assignedTo)}</span>` : ''}</td>
+        <td class="right">${r.actualMonthlyUsage > 0 ? `${fmtNum(r.actualMonthlyUsage)} ${escapeHtml(product.unit)}` : '<span class="muted">— ยังไม่มีประวัติ</span>'}</td>
+        <td class="right" data-requires="edit">
+          <input type="number" class="dp-override" data-customer="${escapeHtml(r.customerName)}" step="any" min="0"
+            placeholder="${r.actualMonthlyUsage > 0 ? Math.round(r.actualMonthlyUsage) : '0'}"
+            value="${r.overrideMonthlyUsage != null ? r.overrideMonthlyUsage : ''}" style="width:100px">
+        </td>
+        <td class="right">
+          <strong>${fmtNum(r.effectiveMonthlyUsage)} ${escapeHtml(product.unit)}</strong>
+          ${r.overrideMonthlyUsage != null && r.actualMonthlyUsage > 0 ? ' <span class="badge warning">ปรับเอง</span>' : ''}
+          ${r.overrideMonthlyUsage != null && r.actualMonthlyUsage === 0 ? ' <span class="badge none">คาดการณ์</span>' : ''}
+        </td>
+        <td data-requires="edit">${r.estimateId ? `<button type="button" class="secondary dp-clear" data-id="${r.estimateId}">ล้างค่า</button>` : ''}</td>
+      </tr>`).join('');
+
+    body.innerHTML = `
+      <p class="muted">รายชื่อลูกค้าที่เบิก "${escapeHtml(product.name)}" ในช่วง 90 วันล่าสุด พร้อมอัตราการใช้เฉลี่ยต่อเดือน — ปรับตัวเลขในช่อง "คาดการณ์เอง" ได้ถ้าคิดว่าลูกค้ารายนั้นจะสั่งมากขึ้น/น้อยลง หรือเพิ่มลูกค้าใหม่ที่ยังไม่มีประวัติด้านล่าง แล้วกดใช้ยอดรวมเป็น safety stock</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>ลูกค้า</th><th class="right">การใช้จริง/เดือน (90 วันล่าสุด)</th><th class="right" data-requires="edit">คาดการณ์เอง/เดือน</th><th class="right">ใช้คำนวณ</th><th data-requires="edit"></th></tr></thead>
+          <tbody>${rowsHtml || '<tr><td colspan="5" class="muted">ยังไม่มีประวัติลูกค้าสำหรับสินค้านี้ — เพิ่มลูกค้าคาดการณ์ได้ด้านล่าง</td></tr>'}</tbody>
+          <tfoot><tr>
+            <td colspan="2" class="right"><strong>รวมคาดการณ์การใช้/เดือน</strong></td>
+            <td data-requires="edit"></td>
+            <td class="right"><strong>${fmtNum(totalMonthlyUsage)} ${escapeHtml(product.unit)}</strong></td>
+            <td data-requires="edit"></td>
+          </tr></tfoot>
+        </table>
+      </div>
+      <div class="card" data-requires="edit" style="margin-top:14px">
+        <h3>เพิ่มลูกค้าใหม่ (คาดการณ์)</h3>
+        <div class="form-row">
+          <label class="field">ชื่อลูกค้า
+            <input type="text" id="dp-new-name" list="dp-customer-list" placeholder="พิมพ์ชื่อลูกค้า" autocomplete="off">
+            <datalist id="dp-customer-list">${state.customers.map((c) => `<option value="${escapeHtml(c.name)}">`).join('')}</datalist>
+          </label>
+          <label class="field">คาดการณ์การใช้/เดือน
+            <input type="number" id="dp-new-qty" step="any" min="0">
+          </label>
+          <button type="button" id="dp-add-btn" class="secondary" style="align-self:flex-end">เพิ่ม</button>
+        </div>
+        <div id="dp-add-msg"></div>
+      </div>
+      <div class="card" data-requires="edit" style="margin-top:14px">
+        <p>Safety stock ปัจจุบันของ "${escapeHtml(product.name)}": <strong>${fmtNum(product.reorderLevel)} ${escapeHtml(product.unit)}</strong></p>
+        <button type="button" id="dp-apply-btn" class="primary">ใช้ยอดรวม ${fmtNum(totalMonthlyUsage)} ${escapeHtml(product.unit)} เป็น Safety Stock ใหม่</button>
+        <div id="dp-apply-msg"></div>
+      </div>
+    `;
+
+    body.querySelectorAll('.dp-override').forEach((input) => {
+      input.addEventListener('change', async () => {
+        const val = input.value.trim();
+        try {
+          if (val === '') {
+            const row = rows.find((r) => r.customerName === input.dataset.customer);
+            if (row && row.estimateId) await api('DELETE', `/api/demand/estimate/${row.estimateId}`);
+          } else {
+            await api('PUT', `/api/demand/${product.id}/customer`, {
+              customerName: input.dataset.customer,
+              predictedMonthlyUsage: Number(val),
+            });
+          }
+          await loadWorksheet();
+        } catch (err) {
+          alert(err.message);
+        }
+      });
+    });
+
+    body.querySelectorAll('.dp-clear').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        try {
+          await api('DELETE', `/api/demand/estimate/${btn.dataset.id}`);
+          await loadWorksheet();
+        } catch (err) {
+          alert(err.message);
+        }
+      });
+    });
+
+    const addBtn = document.getElementById('dp-add-btn');
+    if (addBtn) addBtn.addEventListener('click', async () => {
+      const msg = document.getElementById('dp-add-msg');
+      msg.innerHTML = '';
+      const name = document.getElementById('dp-new-name').value.trim();
+      const qty = Number(document.getElementById('dp-new-qty').value);
+      if (!name || !qty || qty <= 0) {
+        msg.innerHTML = '<p class="msg error">กรุณากรอกชื่อลูกค้าและจำนวนที่มากกว่า 0</p>';
+        return;
+      }
+      try {
+        await api('PUT', `/api/demand/${product.id}/customer`, { customerName: name, predictedMonthlyUsage: qty });
+        await loadWorksheet();
+      } catch (err) {
+        msg.innerHTML = `<p class="msg error">${escapeHtml(err.message)}</p>`;
+      }
+    });
+
+    const applyBtn = document.getElementById('dp-apply-btn');
+    if (applyBtn) applyBtn.addEventListener('click', async () => {
+      const msg = document.getElementById('dp-apply-msg');
+      msg.innerHTML = '';
+      const newLevel = Math.round(totalMonthlyUsage);
+      if (!confirm(`ตั้งค่า Safety Stock ของ "${product.name}" เป็น ${fmtNum(newLevel)} ${product.unit} ใช่หรือไม่?`)) return;
+      try {
+        await api('PATCH', `/api/products/${product.id}/forecast-settings`, { reorderLevel: newLevel });
+        await loadProducts();
+        msg.innerHTML = '<p class="msg success">อัปเดต Safety Stock เรียบร้อยแล้ว</p>';
+      } catch (err) {
+        msg.innerHTML = `<p class="msg error">${escapeHtml(err.message)}</p>`;
+      }
+    });
+
+    applyPermissionGates(body);
+  }
 }
 
 // ---------- Customers ----------

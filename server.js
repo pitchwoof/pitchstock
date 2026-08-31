@@ -15,6 +15,7 @@ const supplierRoutes = require('./routes/suppliers');
 const claimRoutes = require('./routes/claims');
 const customerRoutes = require('./routes/customers');
 const purchaseOrderRoutes = require('./routes/purchase-orders');
+const demandRoutes = require('./routes/demand');
 
 const app = express();
 const PORT = process.env.PORT || 3300;
@@ -46,6 +47,7 @@ app.use('/api/suppliers', supplierRoutes);
 app.use('/api/claims', claimRoutes);
 app.use('/api/customers', customerRoutes);
 app.use('/api/purchase-orders', purchaseOrderRoutes);
+app.use('/api/demand', demandRoutes);
 
 app.use(express.static(path.join(__dirname, 'public')));
 

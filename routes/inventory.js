@@ -16,6 +16,12 @@ function daysUntil(dateStr) {
   return Math.round((target - today) / (1000 * 60 * 60 * 24));
 }
 
+function addDays(dateStr, days) {
+  const d = new Date(dateStr);
+  d.setDate(d.getDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
 function expiryStatus(dateStr) {
   const days = daysUntil(dateStr);
   if (days === null) return 'none';
@@ -216,10 +222,18 @@ router.get('/outflow-trend', requireAuth, (req, res) => {
 });
 
 // ---------- Reorder forecast ----------
-// Fixed planning assumptions (not per-product — apply the same monthly ordering cadence to everyone):
-const REVIEW_PERIOD_DAYS = 30; // how often orders are placed (monthly)
-const SAFETY_BUFFER_DAYS = 7;  // extra cushion on top of lead time + review period
+// safety stock = the product's own reorder point (จุดสั่งซื้อ, set on the product page) — the
+// stock level the company has already decided it wants on hand at all times, before lead time.
+// Order-up-to target = safety stock + expected demand during lead time (classic reorder formula).
+const REVIEW_PERIOD_DAYS = 30;  // fallback usage estimate window when there's no transaction history
 const USAGE_LOOKBACK_DAYS = 90; // window for computing "actual recent" usage from real transactions
+
+// Demand-shift detection: the 90-day average is slow to react when a customer switches SKU or
+// a new customer starts buying, so safety stock (a manually-set number) quietly goes stale.
+// Comparing the last 30 days against the 30 days before that surfaces the step-change quickly,
+// as a prompt to review safety stock — it does not feed back into avgDailyUsage/safetyStock itself.
+const SHIFT_WINDOW_DAYS = 30;
+const SHIFT_THRESHOLD = 0.4; // 40% swing
 
 router.get('/reorder-forecast', requireAuth, (req, res) => {
   // Brand doubles as the supplier for this business (each ink brand is carried by one distributor),
@@ -231,7 +245,13 @@ router.get('/reorder-forecast', requireAuth, (req, res) => {
   const batchStmt = db.prepare(`
     SELECT * FROM batches
     WHERE product_id = ? AND quantity_remaining > 0
-    ORDER BY (expiration_date IS NULL) ASC, expiration_date ASC, received_date ASC
+  `);
+
+  // Purchase orders already placed but not yet received — counts toward the target so the
+  // forecast doesn't recommend ordering stock that's already on its way.
+  const pendingPoStmt = db.prepare(`
+    SELECT quantity, order_date, expected_date FROM purchase_orders
+    WHERE product_id = ? AND status = 'pending'
   `);
 
   const lookbackStart = new Date();
@@ -249,6 +269,23 @@ router.get('/reorder-forecast', requireAuth, (req, res) => {
   `).all(lookbackStartStr);
   const recentUsageByProduct = new Map(recentUsageRows.map((r) => [r.product_id, r.qty]));
 
+  const shiftWindowStart = addDays(new Date().toISOString().slice(0, 10), -SHIFT_WINDOW_DAYS);
+  const shiftWindowPriorStart = addDays(new Date().toISOString().slice(0, 10), -SHIFT_WINDOW_DAYS * 2);
+  const last30Rows = db.prepare(`
+    SELECT product_id, SUM(quantity) AS qty
+    FROM stock_transactions
+    WHERE type = 'OUT' AND transaction_date >= ? AND COALESCE(purpose, 'sale') != 'trial'
+    GROUP BY product_id
+  `).all(shiftWindowStart);
+  const prior30Rows = db.prepare(`
+    SELECT product_id, SUM(quantity) AS qty
+    FROM stock_transactions
+    WHERE type = 'OUT' AND transaction_date >= ? AND transaction_date < ? AND COALESCE(purpose, 'sale') != 'trial'
+    GROUP BY product_id
+  `).all(shiftWindowPriorStart, shiftWindowStart);
+  const last30ByProduct = new Map(last30Rows.map((r) => [r.product_id, r.qty]));
+  const prior30ByProduct = new Map(prior30Rows.map((r) => [r.product_id, r.qty]));
+
   const results = products.map((p) => {
     const recentUsage = recentUsageByProduct.get(p.id) || 0;
     let avgDailyUsage;
@@ -261,53 +298,55 @@ router.get('/reorder-forecast', requireAuth, (req, res) => {
       usageSource = 'estimated';
     }
 
-    const batches = batchStmt.all(p.id);
-    const onHandTotal = batches.reduce((s, b) => s + b.quantity_remaining, 0);
-
-    let usableStock = 0;
-    let projectedWaste = 0;
-    let daysOfCover = null;
-
-    if (avgDailyUsage <= 0) {
-      // No usage signal at all — can't project consumption. Just split by whether it's already expired.
-      for (const b of batches) {
-        const days = daysUntil(b.expiration_date);
-        if (days !== null && days < 0) projectedWaste += b.quantity_remaining;
-        else usableStock += b.quantity_remaining;
-      }
-    } else {
-      let cumulativeDaysNeeded = 0;
-      for (const b of batches) {
-        const expiryDays = daysUntil(b.expiration_date);
-        if (expiryDays !== null && expiryDays < 0) {
-          projectedWaste += b.quantity_remaining;
-          continue;
-        }
-        const batchDays = b.quantity_remaining / avgDailyUsage;
-        const availableWindow = expiryDays === null ? Infinity : expiryDays - cumulativeDaysNeeded;
-        if (availableWindow <= 0) {
-          projectedWaste += b.quantity_remaining;
-        } else if (availableWindow >= batchDays) {
-          usableStock += b.quantity_remaining;
-          cumulativeDaysNeeded += batchDays;
-        } else {
-          const consumable = availableWindow * avgDailyUsage;
-          usableStock += consumable;
-          projectedWaste += b.quantity_remaining - consumable;
-          cumulativeDaysNeeded = expiryDays;
-        }
-      }
-      daysOfCover = cumulativeDaysNeeded;
+    const usageLast30 = last30ByProduct.get(p.id) || 0;
+    const usagePrior30 = prior30ByProduct.get(p.id) || 0;
+    let usageShift = null;
+    let usageShiftPct = null;
+    if (usagePrior30 > 0) {
+      usageShiftPct = (usageLast30 - usagePrior30) / usagePrior30;
+      if (usageShiftPct >= SHIFT_THRESHOLD) usageShift = 'up';
+      else if (usageShiftPct <= -SHIFT_THRESHOLD) usageShift = 'down';
+    } else if (usageLast30 > 0) {
+      // No usage at all in the prior window but real usage now — a new customer/SKU picking
+      // up, or an existing one ramping up from zero. Can't express this as a % change.
+      usageShift = 'up';
     }
 
+    const batches = batchStmt.all(p.id);
+    const onHandTotal = batches.reduce((s, b) => s + b.quantity_remaining, 0);
+    const expiredQty = batches.reduce((s, b) => {
+      const days = daysUntil(b.expiration_date);
+      return days !== null && days < 0 ? s + b.quantity_remaining : s;
+    }, 0);
+
     const leadTimeDays = p.lead_time_days || 30;
-    const targetCoverDays = leadTimeDays + REVIEW_PERIOD_DAYS + SAFETY_BUFFER_DAYS;
-    const targetStockQty = avgDailyUsage * targetCoverDays;
-    const suggestedOrderQty = avgDailyUsage > 0 ? Math.max(0, targetStockQty - usableStock) : 0;
+    const safetyStock = p.reorder_level;
+    const leadTimeDemand = avgDailyUsage * leadTimeDays;
+
+    const pendingPOs = pendingPoStmt.all(p.id);
+    const onOrderQty = pendingPOs.reduce((s, po) => s + po.quantity, 0);
+    // If a PO has no "คาดว่าจะถึง" date filled in, estimate its arrival from when it was
+    // placed plus this product's lead time — then surface the soonest one expected in.
+    const nextExpectedDate = pendingPOs.length
+      ? pendingPOs
+        .map((po) => po.expected_date || addDays(po.order_date, leadTimeDays))
+        .sort()[0]
+      : null;
+
+    // Total stock on hand needs to cover safety stock PLUS whatever gets consumed while
+    // waiting for a new order to arrive — using onHandTotal (not a usable/FEFO-adjusted
+    // figure), since the recommendation should reflect everything physically in stock.
+    // Stock already on order counts toward that target too, so we don't double-order.
+    const targetStockQty = safetyStock + leadTimeDemand;
+    const suggestedOrderQty = Math.max(0, targetStockQty - onHandTotal - onOrderQty);
+    const daysOfCover = avgDailyUsage > 0 ? onHandTotal / avgDailyUsage : null;
 
     let status;
     if (avgDailyUsage <= 0) status = 'no_usage_data';
-    else if (daysOfCover < leadTimeDays) status = 'urgent';
+    // Only "urgent" if there's still something to order after counting stock already on
+    // order — otherwise a big enough pending PO would leave onHandTotal looking thin while
+    // suggestedOrderQty is already 0, flagging red for nothing actionable.
+    else if (suggestedOrderQty > 0 && daysOfCover < leadTimeDays) status = 'urgent';
     else if (suggestedOrderQty > 0) status = 'order_soon';
     else status = 'ok';
 
@@ -321,10 +360,14 @@ router.get('/reorder-forecast', requireAuth, (req, res) => {
       leadTimeDays,
       avgMonthlyUsage: avgDailyUsage * 30,
       usageSource,
+      usageShift,
+      usageShiftPct,
+      safetyStock,
+      leadTimeDemand,
+      onOrderQty,
+      nextExpectedDate,
       onHandTotal,
-      usableStock,
-      projectedWaste,
-      daysOfCover,
+      expiredQty,
       suggestedOrderQty,
       status,
     };
@@ -336,12 +379,11 @@ router.get('/reorder-forecast', requireAuth, (req, res) => {
   const summary = {
     urgentCount: results.filter((r) => r.status === 'urgent').length,
     orderSoonCount: results.filter((r) => r.status === 'order_soon').length,
-    wasteRiskCount: results.filter((r) => r.projectedWaste > 0).length,
+    expiredCount: results.filter((r) => r.expiredQty > 0).length,
+    shiftCount: results.filter((r) => r.usageShift).length,
   };
 
   res.json({
-    reviewPeriodDays: REVIEW_PERIOD_DAYS,
-    safetyBufferDays: SAFETY_BUFFER_DAYS,
     summary,
     products: results,
   });
