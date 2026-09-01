@@ -1,6 +1,6 @@
 const express = require('express');
 const db = require('../db');
-const { requireAuth, requireCreate, requireEdit } = require('../middleware/auth');
+const { requireAuth, requireCreate } = require('../middleware/auth');
 
 const router = express.Router();
 
@@ -70,7 +70,10 @@ router.post('/', requireAuth, requireCreate, (req, res) => {
   res.status(201).json({ id: Number(info.lastInsertRowid) });
 });
 
-router.patch('/:id', requireAuth, requireEdit, (req, res) => {
+// requireCreate (not requireEdit): the two actions that hit this endpoint from the UI —
+// "รับคืนเข้าคลัง" and "ปฏิเสธทั้งหมด" — are both already exposed to creator-role staff
+// (gated data-requires="create"), so the permission here needs to match that intent.
+router.patch('/:id', requireAuth, requireCreate, (req, res) => {
   const { status, resolutionNote, redirectedTo, redirectedQuantity } = req.body || {};
   const claim = db.prepare('SELECT * FROM claims WHERE id = ?').get(req.params.id);
   if (!claim) return res.status(404).json({ error: 'ไม่พบรายการเคลม' });
