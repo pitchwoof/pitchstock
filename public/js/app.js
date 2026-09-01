@@ -588,6 +588,9 @@ function buildForecastTableHTML(products) {
     const shiftCell = p.usageShift
       ? `<span class="badge ${p.usageShift === 'up' ? 'warning' : 'none'}" title="เทียบยอดใช้ 30 วันล่าสุดกับ 30 วันก่อนหน้า — สัญญาณว่าดีมานด์เปลี่ยน ควรทบทวน safety stock ของสินค้านี้">${p.usageShift === 'up' ? '▲' : '▼'} ${shiftLabel}</span>`
       : '<span class="muted">—</span>';
+    const daysOfCoverLabel = p.daysOfCover !== null
+      ? `<br><span class="muted" style="font-size:11.5px">คงเหลือใช้ได้อีก ${Math.round(p.daysOfCover)} วัน${p.daysOfCover < p.leadTimeDays ? ' <span style="color:var(--danger)">(ก่อนของใหม่จะมาถึง)</span>' : ''}</span>`
+      : '';
     return `
       <tr>
         <td><strong>${escapeHtml(p.name)}</strong><br><span class="muted">${escapeHtml(p.skuCode)}</span></td>
@@ -599,7 +602,7 @@ function buildForecastTableHTML(products) {
         <td class="right">${fmtNum(p.onHandTotal)} ${escapeHtml(p.unit)}${expiredNote}</td>
         <td class="right">${onOrderCell}</td>
         <td class="right"><strong>${fmtNum(p.suggestedOrderQty)} ${escapeHtml(p.unit)}</strong></td>
-        <td><span class="badge ${st.badge}">${st.label}</span></td>
+        <td><span class="badge ${st.badge}">${st.label}</span>${daysOfCoverLabel}</td>
       </tr>`;
   }).join('');
 

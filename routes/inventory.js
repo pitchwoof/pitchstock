@@ -369,6 +369,7 @@ router.get('/reorder-forecast', requireAuth, (req, res) => {
       onHandTotal,
       expiredQty,
       suggestedOrderQty,
+      daysOfCover,
       status,
     };
   });
