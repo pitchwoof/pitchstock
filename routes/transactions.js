@@ -4,10 +4,16 @@ const { requireAuth, requireEdit } = require('../middleware/auth');
 
 const router = express.Router();
 
-function buildQuery({ productId, type, from, to, purpose, customer, salesperson }) {
+function buildQuery({ productId, type, from, to, purpose, customer, salesperson, requisitionNo }) {
   const clauses = [];
   const params = [];
   const joins = [];
+  const reqNo = typeof requisitionNo === 'string' ? requisitionNo.trim() : '';
+  if (reqNo) {
+    // Partial, case-insensitive match; % and _ typed by the user are matched literally.
+    clauses.push("t.requisition_no LIKE ? ESCAPE '\\'");
+    params.push(`%${reqNo.replace(/[\\%_]/g, (c) => `\\${c}`)}%`);
+  }
   if (productId) { clauses.push('t.product_id = ?'); params.push(productId); }
   if (type) { clauses.push('t.type = ?'); params.push(type); }
   if (from) { clauses.push('t.transaction_date >= ?'); params.push(from); }

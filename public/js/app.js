@@ -140,6 +140,7 @@ const routes = {
   customers: renderCustomers,
   users: renderUsers,
   account: renderAccount,
+  'expiry-calc': renderExpiryCalc,
 };
 
 function route() {
@@ -1567,6 +1568,9 @@ async function renderHistory(container) {
         <label class="field">พนักงานขายที่ดูแล
           <select id="hf-salesperson"><option value="">ทั้งหมด</option>${salespeople.map((s) => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`).join('')}</select>
         </label>
+        <label class="field">เลขใบเบิก
+          <input type="search" id="hf-req-no" placeholder="ค้นหาเลขใบเบิก..." autocomplete="off">
+        </label>
         <label class="field">จาก <input type="date" id="hf-from"></label>
         <label class="field">ถึง <input type="date" id="hf-to"></label>
         <button id="hf-apply" class="secondary">กรอง</button>
@@ -1585,6 +1589,8 @@ async function renderHistory(container) {
     const salesperson = document.getElementById('hf-salesperson').value;
     const from = document.getElementById('hf-from').value;
     const to = document.getElementById('hf-to').value;
+    const reqNo = document.getElementById('hf-req-no').value.trim();
+    if (reqNo) params.set('requisitionNo', reqNo);
     if (productId) params.set('productId', productId);
     if (type) params.set('type', type);
     if (purpose) params.set('purpose', purpose);
@@ -1596,9 +1602,8 @@ async function renderHistory(container) {
   }
 
   async function load() {
-    const isAdmin = state.user.role === 'admin';
     const rows = await api('GET', `/api/transactions?${currentQuery()}`);
-    const colCount = isAdmin ? 13 : 11;
+    const colCount = 11;
 
     const outProductIds = [...new Set(rows.filter((t) => t.type === 'OUT' && canEdit()).map((t) => t.product_id))];
     const batchesByProduct = {};
@@ -1621,7 +1626,6 @@ async function renderHistory(container) {
         <td class="muted">${escapeHtml(t.requisition_no || '')}</td>
         <td class="muted">${escapeHtml(t.user_name || '')}</td>
         <td class="muted">${escapeHtml(t.note || '')}</td>
-        ${isAdmin ? `<td class="right">${t.unit_price != null ? fmtNum(t.unit_price) : '—'}</td><td class="right">${t.unit_price != null ? fmtNum(t.unit_price * t.quantity) : '—'}</td>` : ''}
         <td>${rowEditable ? '<span class="inv-chevron">▸</span> แก้ไข' : ''}</td>
       </tr>`;
       if (!rowEditable) return mainRow;
@@ -1686,7 +1690,7 @@ async function renderHistory(container) {
     }).join('');
     document.getElementById('hf-table').innerHTML = `
       <table>
-        <thead><tr><th>วันที่</th><th>ประเภท</th><th>สินค้า</th><th>ล็อต</th><th>วันหมดอายุ</th><th class="right">จำนวน</th><th>ลูกค้า/ซัพพลายเออร์</th><th>เลขใบเบิก</th><th>โดย</th><th>หมายเหตุ</th>${isAdmin ? '<th class="right">ราคา/หน่วย</th><th class="right">มูลค่ารวม</th>' : ''}<th></th></tr></thead>
+        <thead><tr><th>วันที่</th><th>ประเภท</th><th>สินค้า</th><th>ล็อต</th><th>วันหมดอายุ</th><th class="right">จำนวน</th><th>ลูกค้า/ซัพพลายเออร์</th><th>เลขใบเบิก</th><th>โดย</th><th>หมายเหตุ</th><th></th></tr></thead>
         <tbody>${body || `<tr><td colspan="${colCount}" class="muted">ไม่พบรายการที่ตรงกัน</td></tr>`}</tbody>
       </table>`;
 
@@ -1762,6 +1766,9 @@ async function renderHistory(container) {
   }
 
   document.getElementById('hf-apply').addEventListener('click', load);
+  document.getElementById('hf-req-no').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); load(); }
+  });
   document.getElementById('hf-export').addEventListener('click', () => {
     window.open(`/api/transactions/export.csv?${currentQuery()}`, '_blank');
   });
@@ -2783,6 +2790,164 @@ async function renderUsers(container) {
 }
 
 // ---------- Account ----------
+// ---------- คำนวณวันหมดอายุ (expiry calculator, browser-only, nothing is saved) ----------
+const EXPIRY_MIN_MONTHS = 4;
+
+
+// Local calendar date at noon (avoids any day-boundary drift when adding days).
+function calDate(y, m, d) { return new Date(y, m - 1, d, 12); }
+function todayCal() { const n = new Date(); return calDate(n.getFullYear(), n.getMonth() + 1, n.getDate()); }
+function addDaysCal(dt, n) { return calDate(dt.getFullYear(), dt.getMonth() + 1, dt.getDate() + n); }
+// Same day N months later; clamps to the month's last day (31 Oct + 4 months → 28/29 Feb).
+function addMonthsCal(dt, n) {
+  const y = dt.getFullYear(); const m = dt.getMonth() + n;
+  const last = new Date(y, m + 1, 0).getDate();
+  return new Date(y, m, Math.min(dt.getDate(), last), 12);
+}
+function daysBetweenCal(a, b) { return Math.round((b - a) / 86400000); }
+// This page writes dates the way labels do, in ค.ศ.: with a day "13/03/27", month only "4/27".
+function fmtCalDay(dt) {
+  const p = (n) => String(n).padStart(2, '0');
+  return `${p(dt.getDate())}/${p(dt.getMonth() + 1)}/${p(dt.getFullYear() % 100)}`;
+}
+function fmtCalMonth(dt) {
+  return `${dt.getMonth() + 1}/${String(dt.getFullYear() % 100).padStart(2, '0')}`;
+}
+// A month-only label means the 1st of that month, so the month-only version of a date is the
+// first month whose 1st is on or after it (13/03/27 → 4/27; 01/04/27 → 4/27).
+function monthOnOrAfter(dt) {
+  return dt.getDate() === 1 ? dt : calDate(dt.getFullYear(), dt.getMonth() + 2, 1);
+}
+
+// Year as printed on labels: 4 digits (≥2400 = พ.ศ.) or 2 digits (00–49 = ค.ศ. 20xx, 50–99 = พ.ศ. 25xx).
+function expiryYear(s) {
+  const n = Number(s);
+  if (s.length === 4) return n >= 2400 ? n - 543 : n;
+  return n >= 50 ? 2500 + n - 543 : 2000 + n;
+}
+
+// Accepts d/m/yy, d/m/yyyy, m/yy, m/yyyy (separators / - . or space), or yyyy-mm-dd.
+// Returns { date, dayGiven } or { error }.
+function parseExpiryInput(raw) {
+  const s = String(raw || '').trim();
+  if (!s) return { error: '' };
+  let y; let m; let d; let dayGiven = true;
+  let mt = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (mt) { y = Number(mt[1]); m = Number(mt[2]); d = Number(mt[3]); if (y >= 2400) y -= 543; }
+  else if ((mt = s.match(/^(\d{1,2})\s*[/\-. ]\s*(\d{1,2})\s*[/\-. ]\s*(\d{2}|\d{4})$/))) {
+    d = Number(mt[1]); m = Number(mt[2]); y = expiryYear(mt[3]);
+  } else if ((mt = s.match(/^(\d{1,2})\s*[/\-. ]\s*(\d{2}|\d{4})$/))) {
+    m = Number(mt[1]); y = expiryYear(mt[2]); d = 1; dayGiven = false;
+  } else {
+    return { error: 'รูปแบบไม่ถูกต้อง — กรอกเป็น วัน/เดือน/ปี (เช่น 15/3/26) หรือ เดือน/ปี (เช่น 3/26)' };
+  }
+  if (m < 1 || m > 12) return { error: 'เดือนต้องอยู่ระหว่าง 1–12' };
+  const last = new Date(y, m, 0).getDate();
+  if (d < 1 || d > last) return { error: `เดือนนี้มีแค่ ${last} วัน` };
+  return { date: calDate(y, m, d), dayGiven };
+}
+
+async function renderExpiryCalc(container) {
+  const today = todayCal();
+  const target = addMonthsCal(today, EXPIRY_MIN_MONTHS);
+  container.innerHTML = `
+    <h2>คำนวณวันหมดอายุ</h2>
+    <div class="card stack" style="max-width:640px">
+      <label class="field">วันหมดอายุบนฉลาก
+        <input type="text" id="exp-input" inputmode="numeric" autocomplete="off" placeholder="เช่น 15/3/26 หรือ 3/26">
+      </label>
+      <p class="muted" style="margin:0">วันนี้: <strong>${escapeHtml(fmtCalDay(today))}</strong> · ครบ ${EXPIRY_MIN_MONTHS} เดือนจากวันนี้ = <strong>${escapeHtml(fmtCalDay(target))}</strong></p>
+      <div id="exp-result" aria-live="polite"></div>
+      <div id="exp-extend" class="hidden stack">
+        <label class="field">ต้องการบวกอีกกี่วัน
+          <input type="number" id="exp-add" min="0" step="1" inputmode="numeric">
+        </label>
+        <div id="exp-new"></div>
+      </div>
+    </div>
+    <div class="card" style="max-width:640px;margin-top:14px">
+      <strong>หมายเหตุ</strong>
+      <ul style="margin:8px 0 0;padding-left:20px" class="muted">
+        <li>ถ้ากรอกแค่เดือน/ปี (เช่น 3/26) ระบบจะนับว่าหมดอายุ <strong>วันที่ 1 ของเดือนนั้น</strong> (3/26 = 01/03/26) ตามที่ลูกค้านับ</li>
+        <li>เกณฑ์ ${EXPIRY_MIN_MONTHS} เดือน นับตามปฏิทินจากวันนี้ (วันที่เดียวกันในอีก ${EXPIRY_MIN_MONTHS} เดือน)</li>
+        <li>ปี 2 หลัก: 00–49 อ่านเป็น ค.ศ. 20xx (26 = 2026), 50–99 อ่านเป็น พ.ศ. 25xx (69 = 2569) · ปี 4 หลักกรอกได้ทั้ง ค.ศ. และ พ.ศ.</li>
+        <li>หน้านี้คำนวณอย่างเดียว ไม่ได้บันทึกหรือแก้ข้อมูลในระบบ</li>
+      </ul>
+    </div>`;
+
+  const input = document.getElementById('exp-input');
+  const result = document.getElementById('exp-result');
+  const extend = document.getElementById('exp-extend');
+  const addInput = document.getElementById('exp-add');
+  const newBox = document.getElementById('exp-new');
+  let current = null;
+
+  function renderNew() {
+    if (!current) return;
+    const n = Math.max(0, Math.floor(Number(addInput.value) || 0));
+    const newDate = addDaysCal(current, n);
+    const ok = newDate >= target;
+    const stillShort = daysBetweenCal(newDate, target);
+    const monthDate = monthOnOrAfter(newDate);
+    const monthAdd = daysBetweenCal(current, monthDate);
+    newBox.innerHTML = `
+      <div class="exp-new-box ${ok ? 'is-ok' : 'is-short'}">
+        <div class="exp-new-label">วันหมดอายุใหม่ ${n ? `(บวก ${n} วัน)` : '(ไม่ต้องบวก)'}</div>
+        <div class="exp-new-options">
+          <div>
+            <div class="exp-new-kind">แบบมีวัน</div>
+            <div class="exp-new-date">${escapeHtml(fmtCalDay(newDate))}</div>
+          </div>
+          <div>
+            <div class="exp-new-kind">แบบเดือน/ปี</div>
+            <div class="exp-new-date">${escapeHtml(fmtCalMonth(monthDate))}</div>
+            <div class="exp-new-short">= ${escapeHtml(fmtCalDay(monthDate))}${monthAdd !== n ? ` · บวก ${monthAdd} วัน` : ''}</div>
+          </div>
+        </div>
+        <div class="exp-new-status">${ok
+          ? `<span class="badge ok">ครบ ${EXPIRY_MIN_MONTHS} เดือนแล้ว</span> เหลืออีก ${daysBetweenCal(today, newDate)} วัน`
+          : `<span class="badge expired">ยังไม่ครบ ${EXPIRY_MIN_MONTHS} เดือน</span> ต้องบวกเพิ่มอีกอย่างน้อย ${stillShort} วัน`}</div>
+      </div>`;
+  }
+
+  function update() {
+    const parsed = parseExpiryInput(input.value);
+    current = null;
+    if (!parsed.date) {
+      result.innerHTML = parsed.error ? `<p class="msg error">${escapeHtml(parsed.error)}</p>` : '';
+      extend.classList.add('hidden');
+      return;
+    }
+    current = parsed.date;
+    const left = daysBetweenCal(today, current);
+    const short = current < target;
+    const needDays = Math.max(0, daysBetweenCal(current, target));
+    const leftText = left > 0 ? `เหลืออีก <strong>${left}</strong> วันจะหมดอายุ`
+      : left === 0 ? '<strong>หมดอายุวันนี้</strong>'
+      : `<strong>หมดอายุไปแล้ว ${-left} วัน</strong>`;
+    result.innerHTML = `
+      <div class="stat-row" style="margin:4px 0 8px">
+        <div class="stat-tile ${short ? 'danger' : ''}" style="min-width:220px">
+          <div class="num">${left} วัน</div>
+          <div class="label">${left >= 0 ? 'ก่อนหมดอายุ' : 'เลยวันหมดอายุมาแล้ว'}</div>
+        </div>
+      </div>
+      <p style="margin:0">หมดอายุ: <strong>${escapeHtml(fmtCalDay(current))}</strong>
+        ${parsed.dayGiven ? '' : '<br><span class="muted">ไม่ได้ระบุวัน — นับเป็นวันที่ 1 ของเดือนที่หมดอายุ</span>'}</p>
+      <p style="margin:6px 0 0">${leftText}</p>
+      <p style="margin:8px 0 0">${short
+        ? `<span class="badge expired">น้อยกว่า ${EXPIRY_MIN_MONTHS} เดือน</span> ควรบวกอีก <strong>${needDays}</strong> วัน (ดูวันหมดอายุใหม่ด้านล่าง)`
+        : `<span class="badge ok">ครบ ${EXPIRY_MIN_MONTHS} เดือนขึ้นไป</span> ไม่ต้องแก้วันหมดอายุ`}</p>`;
+    extend.classList.remove('hidden');
+    addInput.value = String(needDays);
+    renderNew();
+  }
+
+  input.addEventListener('input', update);
+  addInput.addEventListener('input', renderNew);
+  input.focus();
+}
+
 async function renderAccount(container) {
   container.innerHTML = `
     <h2>เปลี่ยนรหัสผ่าน</h2>
